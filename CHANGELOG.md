@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- HashiCorp Vault: the KV v2 engine named in `path_prefix` is created when missing; set `setup.create_mount` to `false` to disable it.
+
 ### Fixed
 
 - Fix the AWS provider deprecation warning when creating the AWS Parameter Store and Secrets Manager IAM requirements.
