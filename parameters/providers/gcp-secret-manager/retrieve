@@ -17,15 +17,26 @@ VERSION="${EXTERNAL_ID_VERSION:-}"
 [ -z "$VERSION" ] && VERSION="latest"
 
 resp_file=$(mktemp)
-http_code=$(curl -s -o "$resp_file" -w '%{http_code}' \
+http_code=$(curl -s --max-time 30 -o "$resp_file" -w '%{http_code}' \
   -X GET "$GSM_API_URL/projects/$GSM_PROJECT_ID/secrets/$SECRET_ID/versions/$VERSION:access" \
   -H "Authorization: Bearer $GCP_ACCESS_TOKEN") || http_code="000"
 resp=$(cat "$resp_file")
 rm -f "$resp_file"
 
 if [ "$http_code" = "200" ]; then
-  VALUE=$(echo "$resp" | jq -r '.payload.data | @base64d')
-  jq -n --arg value "$VALUE" '{value: $value}'
+  if ! echo "$resp" | jq -e '.payload.data | type == "string"' >/dev/null 2>&1; then
+    log error "❌ Secret Manager returned no payload for '$SECRET_ID' (version $VERSION)"
+    log error ""
+    log error "💡 Possible causes:"
+    log error "   • The access response is malformed or was truncated by a proxy"
+    log error ""
+    log error "🔧 How to fix:"
+    log error "   • Verify: gcloud secrets versions access $VERSION --secret $SECRET_ID --project $GSM_PROJECT_ID"
+    exit 1
+  fi
+  # Decode and build the JSON in one jq pass: going through a shell variable
+  # would strip trailing newlines from the value.
+  echo "$resp" | jq '{value: (.payload.data | @base64d)}'
 elif [ "$http_code" = "404" ]; then
   log error "❌ Secret '$SECRET_ID' (version $VERSION) not found in GCP project '$GSM_PROJECT_ID'"
   log error ""

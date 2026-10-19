@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Add support to manage (store, retrieve and delete) parameters from GCP Secret Manager, through the Secret Manager REST API with `curl` (no gcloud CLI to install at runtime) and native secret versions.
 - Authenticate to GCP Secret Manager with the agent pod's GKE Workload Identity via the metadata server, so no key or secret is handed to the agent; `GCP_ACCESS_TOKEN` overrides it for runs outside GCP.
-- Add the GCP Secret Manager install tofu module (`specs/install/`) built on the shared parameter-storage modules, plus a `specs/requirements/` module that grants the agent's Kubernetes service account (Workload Identity Federation principal) or extra members `roles/secretmanager.admin` under an IAM condition scoped to the provider's secret name prefix.
+- Add the GCP Secret Manager install tofu module (`specs/install/`) built on the shared parameter-storage modules, plus a `specs/requirements/` module that grants the agent's Kubernetes service account (Workload Identity Federation principal) or extra members a least-privilege custom role (only the permissions the provider uses; a predefined role is optional) under an IAM condition scoped to the provider's secret name prefix.
 - Support user-managed replication for GCP Secret Manager secrets (`replica_locations`) for data-residency requirements.
 
 ### Fixed

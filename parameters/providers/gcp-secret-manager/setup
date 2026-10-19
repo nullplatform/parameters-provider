@@ -40,14 +40,16 @@ GSM_NAME_PREFIX=$(get_config_value \
 
 # Secret ids allow only [A-Za-z0-9_-]; the prefix is the IAM scoping anchor, so a
 # prefix outside that charset would silently break the least-privilege condition.
-if [[ ! "$GSM_NAME_PREFIX" =~ ^[A-Za-z0-9_-]+$ ]]; then
+# "__" is the segment separator (see naming), so it can't appear in the prefix:
+# otherwise prefix "np" would also cover secrets of prefix "np__x".
+if [[ ! "$GSM_NAME_PREFIX" =~ ^[A-Za-z0-9_-]+$ ]] || [[ "$GSM_NAME_PREFIX" == *__* ]]; then
   log error "❌ Invalid GCP Secret Manager name prefix '$GSM_NAME_PREFIX'"
   log error ""
   log error "💡 Possible causes:"
   log error "   • The prefix contains characters Secret Manager does not allow in secret ids"
   log error ""
   log error "🔧 How to fix:"
-  log error "   • Use only letters, digits, '_' and '-' (default: nullplatform)"
+  log error "   • Use only letters, digits, '_' and '-', without '__' (default: nullplatform)"
   exit 1
 fi
 
@@ -65,7 +67,7 @@ GCP_ACCESS_TOKEN=$(get_config_value --env GCP_ACCESS_TOKEN)
 
 if [ -z "$GCP_ACCESS_TOKEN" ]; then
   token_file=$(mktemp)
-  http_code=$(curl -s -o "$token_file" -w '%{http_code}' \
+  http_code=$(curl -s --connect-timeout 3 --max-time 10 -o "$token_file" -w '%{http_code}' \
     -H "Metadata-Flavor: Google" \
     "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token") || http_code="000"
   token_resp=$(cat "$token_file")

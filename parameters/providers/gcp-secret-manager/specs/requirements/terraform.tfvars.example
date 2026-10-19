@@ -14,4 +14,8 @@ kubernetes_service_account = {
 # Extra members with the same conditional access, e.g. an agent outside GKE:
 # members = ["serviceAccount:np-agent@acme-prod-secrets.iam.gserviceaccount.com"]
 
+# Least-privilege custom role (default). Disable to grant a predefined role instead:
+# custom_role = { enable = false }
+# role        = "roles/secretmanager.admin"
+
 # enable_api = true # enable secretmanager.googleapis.com from here

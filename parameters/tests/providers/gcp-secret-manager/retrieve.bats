@@ -57,6 +57,26 @@ MOCK
   assert_equal "$(echo "$output" | jq -r '.value')" "$value"
 }
 
+@test "gcp-secret-manager retrieve: trailing newlines in the value are preserved" {
+  value=$'secret-with-newline\n\n'
+  export MOCK_CURL_BODY="{\"payload\":{\"data\":\"$(printf '%s' "$value" | base64 | tr -d '\n')\"}}"
+
+  run bash -c "$DEPS; source $SCRIPT"
+
+  assert_equal "$status" "0"
+  assert_equal "$(echo "$output" | jq -c '.value')" '"secret-with-newline\n\n"'
+}
+
+@test "gcp-secret-manager retrieve: a response without payload fails with troubleshooting" {
+  export MOCK_CURL_BODY='{"name":"projects/123/secrets/x/versions/3"}'
+
+  run bash -c "$DEPS; source $SCRIPT"
+
+  [ "$status" -ne 0 ]
+  assert_contains "$output" "❌ Secret Manager returned no payload"
+  assert_contains "$output" "🔧 How to fix:"
+}
+
 @test "gcp-secret-manager retrieve: without a version reads latest" {
   run bash -c "$DEPS; source $SCRIPT"
 
@@ -85,7 +105,7 @@ MOCK
   assert_contains "$output" "❌ Secret '$EXPECTED_SECRET_ID' (version 7) not found"
   assert_contains "$output" "Requested version '7' does not exist"
   assert_contains "$output" "🔧 How to fix:"
-  [[ "$output" != *'"value"'* ]]
+  [[ "$output" != *'"value"'* ]] || false
 }
 
 @test "gcp-secret-manager retrieve: permission error exits non-zero with the API error" {

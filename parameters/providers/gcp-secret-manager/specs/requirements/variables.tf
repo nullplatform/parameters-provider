@@ -44,8 +44,31 @@ variable "members" {
   default     = []
 }
 
+variable "custom_role" {
+  description = <<-EOT
+    Create (default) and grant a custom role holding only the four permissions the
+    provider uses: secrets.create, secrets.delete, versions.access, versions.add.
+    Set enable = false to grant var.role instead.
+    Fields:
+      enable  — create and grant the custom role (default true).
+      role_id — custom role id, unique per project (letters, digits, '_' and '.').
+  EOT
+  type = object({
+    enable  = bool
+    role_id = optional(string, "nullplatformParametersSecretManager")
+  })
+  default = {
+    enable = true
+  }
+
+  validation {
+    condition     = can(regex("^[A-Za-z0-9_.]{3,64}$", var.custom_role.role_id))
+    error_message = "custom_role.role_id must be 3-64 characters of letters, digits, '_' and '.'."
+  }
+}
+
 variable "role" {
-  description = "Role granted under the prefix condition. The default secretmanager.admin covers create / addVersion / access / delete; the condition is what keeps it least-privilege."
+  description = "Predefined role granted under the prefix condition when custom_role.enable = false. Note that roles/secretmanager.admin also carries secrets.list, which the project clause of the condition admits."
   type        = string
   default     = "roles/secretmanager.admin"
 

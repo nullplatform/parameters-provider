@@ -5,6 +5,8 @@ locals {
     "principal://iam.googleapis.com/projects/${data.google_project.this.number}/locations/global/workloadIdentityPools/${coalesce(var.kubernetes_service_account.workload_pool, "${var.project_id}.svc.id.goog")}/subject/ns/${var.kubernetes_service_account.namespace}/sa/${var.kubernetes_service_account.name}"
   ) : ""
 
+  role = var.custom_role.enable ? google_project_iam_custom_role.provider[0].id : var.role
+
   members = toset(compact(concat([local.workload_identity_member], var.members)))
 
   # Every secret the provider owns is named "<prefix>__..." (see naming).

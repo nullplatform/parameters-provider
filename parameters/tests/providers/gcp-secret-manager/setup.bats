@@ -86,6 +86,16 @@ teardown() {
   assert_contains "$output" "❌ Invalid GCP Secret Manager name prefix 'null/platform'"
 }
 
+@test "gcp-secret-manager setup: rejects a prefix containing the '__' separator" {
+  export GCP_SECRET_MANAGER_PROJECT_ID="my-project"
+  export GCP_SECRET_MANAGER_NAME_PREFIX="np__x"
+
+  run bash -c "$DEPS; source $SCRIPT"
+
+  [ "$status" -ne 0 ]
+  assert_contains "$output" "❌ Invalid GCP Secret Manager name prefix 'np__x'"
+}
+
 @test "gcp-secret-manager setup: requests the token from the metadata server" {
   export GCP_SECRET_MANAGER_PROJECT_ID="my-project"
 
@@ -95,6 +105,7 @@ teardown() {
   captured=$(cat "$CURL_LOG")
   assert_contains "$captured" "Metadata-Flavor: Google"
   assert_contains "$captured" "metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token"
+  assert_contains "$captured" "--max-time"
 }
 
 @test "gcp-secret-manager setup: GCP_ACCESS_TOKEN skips the metadata server" {
@@ -105,7 +116,7 @@ teardown() {
 
   assert_equal "$status" "0"
   assert_contains "$output" "TOKEN=tok-env"
-  [ ! -f "$CURL_LOG" ]
+  [ ! -f "$CURL_LOG" ] || false
 }
 
 @test "gcp-secret-manager setup: fails with troubleshooting when there is no metadata server" {

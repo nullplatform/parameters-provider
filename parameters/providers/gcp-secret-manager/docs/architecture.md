@@ -11,7 +11,7 @@ Everything goes through the Secret Manager REST API (`https://secretmanager.goog
 | Step | What happens |
 |------|--------------|
 | `setup`     | Reads `project_id`, `name_prefix` and `replica_locations`. Gets an access token from the metadata server (the agent pod's Workload Identity), or uses `GCP_ACCESS_TOKEN` when set. Exports `GCP_ACCESS_TOKEN`, `GSM_PROJECT_ID`, `GSM_API_URL`, `GSM_NAME_PREFIX`, `GSM_REPLICA_LOCATIONS`. |
-| `store`     | Builds the canonical path with `build_external_id`, maps it to a secret id (see Storage layout), validates the 255-char limit, creates the secret (`POST /secrets?secretId=`; `409` = already exists), then `POST /secrets/<id>:addVersion`. Returns `external_id = <canonical_path>#<version>`. |
+| `store`     | Builds the canonical path with `build_external_id`, maps it to a secret id (see Storage layout), validates the 255-char limit, then `POST /secrets/<id>:addVersion`. Only on `404` (first store) it creates the secret (`POST /secrets?secretId=`; `409` from a concurrent store is fine) and retries `addVersion`. Returns `external_id = <canonical_path>#<version>`. |
 | `retrieve`  | Maps `EXTERNAL_ID_PATH` to the secret id. `GET /secrets/<id>/versions/<version or latest>:access`, base64-decodes the payload. |
 | `delete`    | Maps `EXTERNAL_ID_PATH` to the secret id. `DELETE /secrets/<id>` (removes every version). Idempotent. |
 | `notify`    | Not implemented — dispatcher returns default `{success: true}`. |
@@ -43,7 +43,9 @@ secret id:   nullplatform__organization-sulamerica-284820983__account-playground
 
 Unlike Azure Key Vault (127 chars), the 255-char budget fits the full form, slugs included, so an operator browsing the Secret Manager console reads the whole nullplatform context from the name. `store` validates the limit **before** calling the API and fails with a clear error on overflow.
 
-Every secret carries the labels `managed_by=nullplatform` and `parameter_id=<id>`.
+Every secret carries the labels `managed_by=nullplatform` and `parameter_id=<id>` (normalized to the label charset).
+
+> **The prefix is part of the name, not of the `external_id`.** Changing `name_prefix` on a provider configuration that already holds values makes every existing parameter answer `404` on retrieve. Treat it as fixed once values exist; to move, re-store the values under the new configuration.
 
 ---
 
@@ -51,8 +53,8 @@ Every secret carries the labels `managed_by=nullplatform` and `parameter_id=<id>
 
 Secret Manager has native versioning: a secret is a container and every `addVersion` appends an immutable version, numbered `1, 2, 3, …`.
 
-- First `store` for an `external_id` → create the secret, then `addVersion` (→ version `1`).
-- Every later `store` → create returns `409 ALREADY_EXISTS` (expected), then `addVersion` (→ `2`, `3`, …).
+- Every `store` → `addVersion` first. On an existing secret that is the only call (→ `2`, `3`, …).
+- First `store` for an `external_id` → `addVersion` answers `404`, so the secret is created and `addVersion` retried (→ version `1`).
 
 ### Version identity in external_id
 
@@ -77,7 +79,7 @@ On `delete`, the version suffix is ignored — deleting the secret removes all v
 - **Default: automatic** — Google chooses where to replicate the payload.
 - **`replica_locations`** set (e.g. `["southamerica-east1"]`) → user-managed replication to exactly those regions, for data-residency requirements.
 
-Replication is fixed when a secret is created. Changing `replica_locations` affects new secrets only; existing ones keep their original policy (`409` on create, then `addVersion`).
+Replication is fixed when a secret is created. Changing `replica_locations` affects new secrets only; existing ones keep their original policy (later stores only call `addVersion`).
 
 ---
 
@@ -126,4 +128,4 @@ Secret Manager bills per **active secret version** per replica location per mont
 ## Install specs
 
 - `specs/install/` — registers the `gcp-secret-manager` parameter-storage specification and one provider configuration per instance (NRN + dimensions), plus the agent notification channel, with the shared tofu-modules. Same shape as the other providers.
-- `specs/requirements/` — grants the agent's KSA principal (and/or extra members) `roles/secretmanager.admin` under an IAM condition scoped to the `name_prefix`, and can enable the API.
+- `specs/requirements/` — grants the agent's KSA principal (and/or extra members) a custom role with only the four permissions the provider uses, under an IAM condition scoped to the `name_prefix`, and can enable the API.

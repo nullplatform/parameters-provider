@@ -48,7 +48,7 @@ MOCK
   assert_contains "$captured" "-X DELETE"
   assert_contains "$captured" "/projects/my-project/secrets/nullplatform__organization-sulamerica-284820983__application-api-222__DB_PASSWORD-42 "
   # The version suffix is ignored: delete removes every version.
-  [[ "$captured" != *"/versions/"* ]]
+  [[ "$captured" != *"/versions/"* ]] || false
 }
 
 @test "gcp-secret-manager delete: not found is idempotent success" {
@@ -70,7 +70,7 @@ MOCK
   [ "$status" -ne 0 ]
   assert_contains "$output" "❌ Failed to delete secret"
   assert_contains "$output" "Underlying error: Permission secretmanager.secrets.delete denied"
-  [[ "$output" != *'"success"'* ]]
+  [[ "$output" != *'"success"'* ]] || false
 }
 
 @test "gcp-secret-manager delete: network failure propagates as exit 1" {

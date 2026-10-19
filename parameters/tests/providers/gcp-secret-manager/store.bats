@@ -5,7 +5,7 @@
 # Verifies:
 #   - secret id = canonical path flattened under "<prefix>__"
 #   - external_id keeps the canonical slash form + "#<version>"
-#   - First store creates the secret; 409 on create falls through to addVersion
+#   - addVersion first; only a 404 (first store) creates the secret, then retries
 #   - The value travels base64-encoded in the body, never on argv
 #   - Replication: automatic by default, user-managed with replica locations
 #   - Real errors propagate with troubleshooting
@@ -25,6 +25,7 @@ setup() {
   mkdir -p "$BATS_TEST_TMPDIR/bin"
   export CURL_LOG="$BATS_TEST_TMPDIR/curl.log"
   export BODY_LOG="$BATS_TEST_TMPDIR/body.log"
+  export ADD_COUNT="$BATS_TEST_TMPDIR/add.count"
   cat > "$BATS_TEST_TMPDIR/bin/curl" << 'MOCK'
 #!/bin/bash
 echo "curl $*" >> "$CURL_LOG"
@@ -42,7 +43,14 @@ if [[ " $* " == *" --data-binary @- "* ]]; then
 fi
 case "$call" in
   create) code="${MOCK_CREATE_CODE:-200}"; body="${MOCK_CREATE_BODY:-}" ;;
-  add)    code="${MOCK_ADD_CODE:-200}";    body="${MOCK_ADD_BODY:-}" ;;
+  add)
+    # MOCK_ADD_CODES is a comma-separated sequence, one entry per addVersion call.
+    n=$(( $(cat "$ADD_COUNT" 2>/dev/null || echo 0) + 1 ))
+    echo "$n" > "$ADD_COUNT"
+    code=$(echo "${MOCK_ADD_CODES:-200}" | cut -d, -f"$n")
+    [ -z "$code" ] && code=$(echo "${MOCK_ADD_CODES:-200}" | awk -F, '{print $NF}')
+    if [ "$code" = "200" ]; then body="${MOCK_ADD_BODY:-}"; else body="${MOCK_ADD_ERROR_BODY:-}"; fi
+    ;;
   *)      code="500";                      body="" ;;
 esac
 [ -n "$out" ] && printf '%s' "$body" > "$out"
@@ -60,7 +68,9 @@ MOCK
   export PARAMETER_VALUE="my-secret"
   export MOCK_CREATE_CODE=200
   export MOCK_CREATE_BODY='{"name":"projects/123/secrets/x"}'
-  export MOCK_ADD_CODE=200
+  # Default: the secret already exists, so the first addVersion succeeds.
+  export MOCK_ADD_CODES=200
+  export MOCK_ADD_ERROR_BODY='{"error":{"code":404,"message":"Secret not found"}}'
   export MOCK_ADD_BODY='{"name":"projects/123/secrets/x/versions/3","state":"ENABLED"}'
 
   export CONTEXT='{
@@ -93,7 +103,7 @@ MOCK
   assert_equal "$status" "0"
   secret_id=$(echo "$output" | jq -r '.metadata.secret_id')
   assert_equal "$secret_id" "nullplatform__organization-sulamerica-284820983__account-playground-1146568170__namespace-billing-111__application-api-222__DB_PASSWORD-42"
-  [[ "$secret_id" =~ ^[A-Za-z0-9_-]+$ ]]
+  [[ "$secret_id" =~ ^[A-Za-z0-9_-]+$ ]] || false
 }
 
 @test "gcp-secret-manager store: metadata carries the version resource name and project" {
@@ -103,26 +113,40 @@ MOCK
   assert_equal "$(echo "$output" | jq -r '.metadata.project_id')" "my-project"
 }
 
-@test "gcp-secret-manager store: creates the secret then adds a version" {
+@test "gcp-secret-manager store: existing secret only adds a version (single call)" {
   run bash -c "$DEPS; source $SCRIPT"
 
+  assert_equal "$status" "0"
   captured=$(cat "$CURL_LOG")
-  assert_contains "$captured" "https://secretmanager.googleapis.com/v1/projects/my-project/secrets?secretId=nullplatform__organization-sulamerica-284820983"
   assert_contains "$captured" "/secrets/nullplatform__organization-sulamerica-284820983__account-playground-1146568170__namespace-billing-111__application-api-222__DB_PASSWORD-42:addVersion"
   assert_contains "$captured" "Authorization: Bearer tok-abc"
-  [ "$(grep -c '' "$CURL_LOG")" -eq 2 ]
+  assert_equal "$(grep -c '' "$CURL_LOG")" "1"
+  if grep -q 'secretId=' "$CURL_LOG"; then false; fi
+}
+
+@test "gcp-secret-manager store: first store (404) creates the secret, then adds the version" {
+  export MOCK_ADD_CODES="404,200"
+
+  run bash -c "$DEPS; source $SCRIPT"
+
+  assert_equal "$status" "0"
+  assert_equal "$(grep -c '' "$CURL_LOG")" "3"
+  assert_contains "$(sed -n 2p "$CURL_LOG")" "https://secretmanager.googleapis.com/v1/projects/my-project/secrets?secretId=nullplatform__organization-sulamerica-284820983"
+  assert_contains "$(sed -n 3p "$CURL_LOG")" ":addVersion"
+  assert_equal "$(echo "$output" | jq -r '.external_id' | sed 's/.*#//')" "3"
 }
 
 @test "gcp-secret-manager store: value travels base64-encoded on stdin, not on argv" {
   run bash -c "$DEPS; source $SCRIPT"
 
-  captured=$(cat "$CURL_LOG")
-  [[ "$captured" != *"my-secret"* ]]
-  bodies=$(cat "$BODY_LOG")
-  assert_contains "$bodies" "$(printf 'my-secret' | base64)"
+  assert_equal "$status" "0"
+  if grep -q 'my-secret' "$CURL_LOG"; then false; fi
+  assert_contains "$(cat "$BODY_LOG")" "$(printf 'my-secret' | base64)"
 }
 
-@test "gcp-secret-manager store: automatic replication and nullplatform labels by default" {
+@test "gcp-secret-manager store: automatic replication and nullplatform labels on create" {
+  export MOCK_ADD_CODES="404,200"
+
   run bash -c "$DEPS; source $SCRIPT"
 
   create_body=$(sed -n '/^\[create\]$/{n;p;}' "$BODY_LOG")
@@ -132,6 +156,7 @@ MOCK
 }
 
 @test "gcp-secret-manager store: replica locations switch to user-managed replication" {
+  export MOCK_ADD_CODES="404,200"
   export GSM_REPLICA_LOCATIONS="southamerica-east1,us-east1"
 
   run bash -c "$DEPS; source $SCRIPT"
@@ -141,15 +166,25 @@ MOCK
   assert_equal "$(echo "$create_body" | jq -c '.replication')" '{"userManaged":{"replicas":[{"location":"southamerica-east1"},{"location":"us-east1"}]}}'
 }
 
-@test "gcp-secret-manager store: existing secret (409) still adds a new version" {
+@test "gcp-secret-manager store: create racing with another store (409) still adds the version" {
+  export MOCK_ADD_CODES="404,200"
   export MOCK_CREATE_CODE=409
   export MOCK_CREATE_BODY='{"error":{"code":409,"message":"Secret already exists"}}'
-  export MOCK_ADD_BODY='{"name":"projects/123/secrets/x/versions/4"}'
 
   run bash -c "$DEPS; source $SCRIPT"
 
   assert_equal "$status" "0"
-  assert_equal "$(echo "$output" | jq -r '.external_id' | sed 's/.*#//')" "4"
+  assert_equal "$(grep -c '' "$CURL_LOG")" "3"
+}
+
+@test "gcp-secret-manager store: parameter_id label is normalized to the label charset" {
+  export MOCK_ADD_CODES="404,200"
+  export PARAMETER_ID="Abc.42"
+
+  run bash -c "$DEPS; source $SCRIPT"
+
+  create_body=$(sed -n '/^\[create\]$/{n;p;}' "$BODY_LOG")
+  assert_equal "$(echo "$create_body" | jq -r '.labels.parameter_id')" "abc-42"
 }
 
 @test "gcp-secret-manager store: dimensions sorted alphabetically, scope included" {
@@ -181,10 +216,11 @@ MOCK
   [ "$status" -ne 0 ]
   assert_contains "$output" "exceeds GCP Secret Manager's 255-character limit"
   assert_contains "$output" "🔧 How to fix:"
-  [ ! -f "$CURL_LOG" ]
+  [ ! -f "$CURL_LOG" ] || false
 }
 
 @test "gcp-secret-manager store: create failure propagates with the API error" {
+  export MOCK_ADD_CODES="404"
   export MOCK_CREATE_CODE=403
   export MOCK_CREATE_BODY='{"error":{"code":403,"message":"Permission secretmanager.secrets.create denied"}}'
 
@@ -197,8 +233,8 @@ MOCK
 }
 
 @test "gcp-secret-manager store: addVersion failure propagates with the API error" {
-  export MOCK_ADD_CODE=403
-  export MOCK_ADD_BODY='{"error":{"code":403,"message":"Permission secretmanager.versions.add denied"}}'
+  export MOCK_ADD_CODES=403
+  export MOCK_ADD_ERROR_BODY='{"error":{"code":403,"message":"Permission secretmanager.versions.add denied"}}'
 
   run bash -c "$DEPS; source $SCRIPT"
 
@@ -208,8 +244,7 @@ MOCK
 }
 
 @test "gcp-secret-manager store: network failure reports no HTTP response" {
-  export MOCK_CREATE_CODE=000
-  export MOCK_CREATE_BODY=''
+  export MOCK_ADD_CODES=000
 
   run bash -c "$DEPS; source $SCRIPT"
 

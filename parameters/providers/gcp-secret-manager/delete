@@ -16,7 +16,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/naming"
 SECRET_ID=$(gsm_secret_id "$EXTERNAL_ID_PATH")
 
 resp_file=$(mktemp)
-http_code=$(curl -s -o "$resp_file" -w '%{http_code}' \
+http_code=$(curl -s --max-time 30 -o "$resp_file" -w '%{http_code}' \
   -X DELETE "$GSM_API_URL/projects/$GSM_PROJECT_ID/secrets/$SECRET_ID" \
   -H "Authorization: Bearer $GCP_ACCESS_TOKEN") || http_code="000"
 resp=$(cat "$resp_file")

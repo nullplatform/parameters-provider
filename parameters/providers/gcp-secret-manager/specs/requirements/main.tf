@@ -6,6 +6,24 @@ resource "google_project_service" "secretmanager" {
   disable_on_destroy = false
 }
 
+# Least-privilege default: only the four permissions the provider calls. Unlike
+# roles/secretmanager.admin it carries no secrets.list, so the agent cannot even
+# enumerate other teams' secret names in a shared project.
+resource "google_project_iam_custom_role" "provider" {
+  count = var.custom_role.enable ? 1 : 0
+
+  project     = var.project_id
+  role_id     = var.custom_role.role_id
+  title       = "nullplatform parameters (GCP Secret Manager)"
+  description = "Store, retrieve and delete nullplatform parameters as Secret Manager secrets"
+  permissions = [
+    "secretmanager.secrets.create",
+    "secretmanager.secrets.delete",
+    "secretmanager.versions.access",
+    "secretmanager.versions.add",
+  ]
+}
+
 # One conditional binding per member. Secret Manager evaluates create (and list)
 # against the project, and everything else (addVersion, access, delete) against
 # the secret, so the condition admits the project itself plus only the secrets
@@ -15,7 +33,7 @@ resource "google_project_iam_member" "secret_manager" {
   for_each = local.members
 
   project = var.project_id
-  role    = var.role
+  role    = local.role
   member  = each.value
 
   condition {
