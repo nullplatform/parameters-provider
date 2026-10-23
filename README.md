@@ -24,6 +24,7 @@ under `parameters/providers/`.
 | `aws-secrets-manager` | AWS Secrets Manager |
 | `aws-parameter-store` | AWS SSM Parameter Store |
 | `azure-key-vault` | Azure Key Vault |
+| `gcp-secret-manager` | Google Cloud Secret Manager |
 | `hashicorp-vault` | HashiCorp Vault (KV v2) |
 
 ## Repository layout
@@ -57,6 +58,7 @@ Start here for how the package works end to end:
 | AWS Secrets Manager | [architecture](parameters/providers/aws-secrets-manager/docs/architecture.md) | [iam-policy](parameters/providers/aws-secrets-manager/docs/iam-policy.md) |
 | AWS Parameter Store | [architecture](parameters/providers/aws-parameter-store/docs/architecture.md) | [iam-policy](parameters/providers/aws-parameter-store/docs/iam-policy.md) |
 | Azure Key Vault | [architecture](parameters/providers/azure-key-vault/docs/architecture.md) | — |
+| GCP Secret Manager | [architecture](parameters/providers/gcp-secret-manager/docs/architecture.md) | [iam-policy](parameters/providers/gcp-secret-manager/docs/iam-policy.md) |
 | HashiCorp Vault | [architecture](parameters/providers/hashicorp-vault/docs/architecture.md) | — |
 
 ## Testing

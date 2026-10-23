@@ -44,6 +44,7 @@ The response includes a `slug` field. That slug must match the name of a directo
 | `aws-secrets-manager` | `parameters/providers/aws-secrets-manager/` |
 | `aws-parameter-store` | `parameters/providers/aws-parameter-store/` |
 | `azure-key-vault` | `parameters/providers/azure-key-vault/` |
+| `gcp-secret-manager` | `parameters/providers/gcp-secret-manager/` |
 
 If the slug doesn't match any installed provider, `build_context` fails with a list of available providers and instructions to either rename the spec slug or add the missing provider.
 
@@ -117,7 +118,21 @@ The shape of `$CONTEXT.provider.attributes` for each provider:
 }
 ```
 
-Authentication comes from the Azure CLI's default credential chain.
+Authentication is a service-principal client-credentials OAuth2 flow against Azure AD, done with `curl` against the REST API (no Azure CLI): `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET` and `AZURE_TENANT_ID` come from the agent environment, never from provider config.
+
+### `gcp-secret-manager`
+
+```json
+{
+  "setup": {
+    "project_id":        "acme-prod-secrets",
+    "name_prefix":       "nullplatform",
+    "replica_locations": ["europe-west1"]
+  }
+}
+```
+
+Only `project_id` is required. Authentication comes from the metadata server (the agent pod's GKE Workload Identity); `GCP_ACCESS_TOKEN` in the agent environment overrides it. See [the provider architecture](../parameters/providers/gcp-secret-manager/docs/architecture.md).
 
 ---
 

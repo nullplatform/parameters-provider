@@ -90,7 +90,7 @@ The shared helper `parameters/utils/build_external_id` constructs the canonical 
 
 **Optional dimensions**: zero or more `key=value` segments, sorted alphabetically by key for determinism. A parameter without dimensions has no dimension segments in the path at all.
 
-Each provider applies the prefix (default `nullplatform/`) and any backend-specific sanitization (Azure Key Vault flattens slashes and equals to dashes; everyone else uses the canonical form). The canonical `external_id` returned to nullplatform is the same across all providers, which makes parameter migration between backends mechanically possible.
+Each provider applies the prefix (default `nullplatform/`) and any backend-specific sanitization (Azure Key Vault flattens slashes and equals to dashes, GCP Secret Manager maps slashes to `__` and equals to `-`; everyone else uses the canonical form). The canonical `external_id` returned to nullplatform is the same across all providers, which makes parameter migration between backends mechanically possible.
 
 ### Version encoding in external_id
 
@@ -108,6 +108,7 @@ The `version_id` is **the native version identifier returned by each backend** �
 | `hashicorp-vault`    | Integer (from `.data.version`)   | `3`                                              |
 | `aws-parameter-store`    | Integer (from `.Version`)        | `7`                                              |
 | `azure-key-vault`    | 32-char hex (URL last segment)   | `93a0b2eb12a64fa7b3acb18900a8d33d`               |
+| `gcp-secret-manager` | Integer (version name last segment) | `3`                                           |
 
 Because nullplatform already persists and re-sends `external_id` on every operation, this versioning works without any platform-side changes. On `retrieve`, the dispatcher's `build_context` splits the suffix; provider scripts use it to target a specific historical version via the backend's native version-fetching mechanism (`--version-id`, `?version=N`, `:N`, `--version`).
 
@@ -149,7 +150,8 @@ parameters/
 │   ├── hashicorp-vault/    # HTTP API
 │   ├── aws-secrets-manager/ # aws CLI
 │   ├── aws-parameter-store/    # aws CLI (only kind-branching provider)
-│   └── azure-key-vault/    # az CLI
+│   ├── azure-key-vault/    # REST API (curl)
+│   └── gcp-secret-manager/ # REST API (curl), Workload Identity
 ├── tests/                  # BATS — mirrors source structure
 └── docs/                   # This file, configuration.md, adding_a_provider.md
 ```
