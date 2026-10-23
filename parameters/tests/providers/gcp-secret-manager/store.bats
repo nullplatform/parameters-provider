@@ -9,6 +9,8 @@
 #   - The value travels base64-encoded in the body, never on argv
 #   - The bearer token travels in a mode-600 header file, never on argv
 #   - Replication: automatic by default, user-managed with replica locations
+#   - Labels: NRN ids and slugs (+ scope when present), managed_by and
+#     parameter_id, normalized to the label charset and never overridable
 #   - Real errors propagate with troubleshooting
 # =============================================================================
 
@@ -193,6 +195,78 @@ MOCK
 
   create_body=$(sed -n '/^\[create\]$/{n;p;}' "$BODY_LOG")
   assert_equal "$(echo "$create_body" | jq -r '.labels.parameter_id')" "abc-42"
+}
+
+@test "gcp-secret-manager store: application-level value is labeled with its NRN ids and slugs, no scope" {
+  export MOCK_ADD_CODES="404,200"
+
+  run bash -c "$DEPS; source $SCRIPT"
+
+  assert_equal "$status" "0"
+  create_body=$(sed -n '/^\[create\]$/{n;p;}' "$BODY_LOG")
+  assert_equal "$(echo "$create_body" | jq -cS '.labels')" '{"account":"production","account_id":"987654321","application":"api","application_id":"222","managed_by":"nullplatform","namespace":"billing","namespace_id":"111","organization":"acme","organization_id":"123456789","parameter_id":"42"}'
+}
+
+@test "gcp-secret-manager store: scope-level value also carries the scope labels" {
+  export MOCK_ADD_CODES="404,200"
+  export CONTEXT=$(echo "$CONTEXT" | jq '.value_entities = (.entities + {scope: "333", scope_slug: "prod"})')
+
+  run bash -c "$DEPS; source $SCRIPT"
+
+  assert_equal "$status" "0"
+  create_body=$(sed -n '/^\[create\]$/{n;p;}' "$BODY_LOG")
+  assert_equal "$(echo "$create_body" | jq -r '.labels.scope_id')" "333"
+  assert_equal "$(echo "$create_body" | jq -r '.labels.scope')" "prod"
+  assert_equal "$(echo "$create_body" | jq -r '.labels.application')" "api"
+  assert_equal "$(echo "$create_body" | jq '.labels | length')" "12"
+}
+
+@test "gcp-secret-manager store: NRN label values are normalized to the label charset" {
+  export MOCK_ADD_CODES="404,200"
+  long_slug=$(printf 'a%.0s' {1..70})
+  export CONTEXT=$(echo "$CONTEXT" | jq --arg long "$long_slug" '.entities.account_slug = "Prod.Main" | .entities.namespace_slug = $long')
+
+  run bash -c "$DEPS; source $SCRIPT"
+
+  assert_equal "$status" "0"
+  create_body=$(sed -n '/^\[create\]$/{n;p;}' "$BODY_LOG")
+  assert_equal "$(echo "$create_body" | jq -r '.labels.account')" "prod-main"
+  assert_equal "$(echo "$create_body" | jq -r '.labels.namespace | length')" "63"
+  echo "$create_body" | jq -e '.labels | to_entries | all(.value | test("^[a-z0-9_-]{0,63}$"))'
+}
+
+@test "gcp-secret-manager store: platform labels cannot be overridden from the payload" {
+  export MOCK_ADD_CODES="404,200"
+  export CONTEXT=$(echo "$CONTEXT" | jq '.tags = {managed_by: "someone", organization_id: "spoofed", team: "payments"} | .labels = {parameter_id: "spoofed"}')
+
+  run bash -c "$DEPS; source $SCRIPT"
+
+  assert_equal "$status" "0"
+  create_body=$(sed -n '/^\[create\]$/{n;p;}' "$BODY_LOG")
+  assert_equal "$(echo "$create_body" | jq -r '.labels.managed_by')" "nullplatform"
+  assert_equal "$(echo "$create_body" | jq -r '.labels.parameter_id')" "42"
+  assert_equal "$(echo "$create_body" | jq -r '.labels.organization_id')" "123456789"
+  assert_equal "$(echo "$create_body" | jq '.labels | has("team")')" "false"
+}
+
+@test "gcp-secret-manager store: an existing secret's labels are not touched" {
+  run bash -c "$DEPS; source $SCRIPT"
+
+  assert_equal "$status" "0"
+  if grep -q '"labels"' "$BODY_LOG"; then false; fi
+}
+
+@test "gcp-secret-manager store: the value stays off argv when labels are built" {
+  export MOCK_ADD_CODES="404,200"
+  mkdir -p "$BATS_TEST_TMPDIR/jqbin"
+  real_jq=$(command -v jq)
+  printf '#!/bin/bash\necho "jq $*" >> "%s"\nexec %s "$@"\n' "$BATS_TEST_TMPDIR/jq.log" "$real_jq" > "$BATS_TEST_TMPDIR/jqbin/jq"
+  chmod +x "$BATS_TEST_TMPDIR/jqbin/jq"
+
+  run bash -c "export PATH=$BATS_TEST_TMPDIR/jqbin:\$PATH; $DEPS; source $SCRIPT"
+
+  assert_equal "$status" "0"
+  if grep -q 'my-secret' "$BATS_TEST_TMPDIR/jq.log"; then false; fi
 }
 
 @test "gcp-secret-manager store: dimensions sorted alphabetically, scope included" {

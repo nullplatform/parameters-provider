@@ -74,12 +74,23 @@ gsm_post "$SECRETS_URL/$SECRET_ID:addVersion" "$VERSION_BODY"
 if [ "$http_code" = "404" ]; then
   log debug "Secret '$SECRET_ID' does not exist yet; creating it"
 
-  # Label values allow only lowercase letters, digits, '_' and '-' (max 63).
-  PARAMETER_ID_LABEL=$(echo "${PARAMETER_ID:-}" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9_-]/-/g' | cut -c1-63)
-  CREATE_BODY=$(jq -nc \
+  # Labels (cost reports, filtering): the parameter's NRN, with the keys the
+  # nullplatform services use for their platform tags. <entity>_id holds the id
+  # and <entity> the slug, for organization, account, namespace, application
+  # and, on scope-level values, scope. managed_by and parameter_id are merged
+  # last, so nothing in the payload can override them. Label values allow only
+  # lowercase letters, digits, '_' and '-' (max 63): anything else becomes '-'.
+  # CONTEXT goes to jq on stdin (it carries the value, which stays off argv).
+  CREATE_BODY=$(echo "$CONTEXT" | jq -c \
     --argjson replication "$REPLICATION" \
-    --arg parameter_id "$PARAMETER_ID_LABEL" \
-    '{replication: $replication, labels: ({managed_by: "nullplatform"} + (if $parameter_id != "" then {parameter_id: $parameter_id} else {} end))}')
+    --arg parameter_id "${PARAMETER_ID:-}" \
+    'def label_value: ascii_downcase | gsub("[^a-z0-9_-]"; "-") | .[0:63];
+     def pair($key; $value): ($value // "" | tostring) as $v | if $v == "" then {} else {($key): ($v | label_value)} end;
+     (.value_entities // .entities // {}) as $entities
+     | (reduce ("organization", "account", "namespace", "application", "scope") as $entity ({};
+         . + pair("\($entity)_id"; $entities[$entity]) + pair($entity; $entities["\($entity)_slug"]))) as $nrn
+     | {replication: $replication,
+        labels: ($nrn + {managed_by: "nullplatform"} + pair("parameter_id"; $parameter_id))}')
 
   gsm_post "$SECRETS_URL?secretId=$SECRET_ID" "$CREATE_BODY"
 

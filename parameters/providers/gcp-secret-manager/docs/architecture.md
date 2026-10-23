@@ -43,7 +43,24 @@ secret id:   nullplatform__organization-acme-123456789__account-production-98765
 
 Unlike Azure Key Vault (127 chars), the 255-char budget fits the full form, slugs included, so an operator browsing the Secret Manager console reads the whole nullplatform context from the name. `store` validates the limit **before** calling the API and fails with a clear error on overflow.
 
-Every secret carries the labels `managed_by=nullplatform` and `parameter_id=<id>` (normalized to the label charset).
+### Labels
+
+`store` labels every secret it creates with the parameter's NRN, so secrets can be filtered and costs broken down by organization, account, namespace, application or scope. The keys follow the platform tags the nullplatform services put on their resources: `<entity>_id` holds the id and `<entity>` the slug.
+
+| Label | Value | When |
+|---|---|---|
+| `organization_id`, `organization` | organization id, slug | always |
+| `account_id`, `account` | account id, slug | always |
+| `namespace_id`, `namespace` | namespace id, slug | always |
+| `application_id`, `application` | application id, slug | always |
+| `scope_id`, `scope` | scope id, slug | scope-level values only |
+| `managed_by` | `nullplatform` | always |
+| `parameter_id` | nullplatform parameter id | always |
+
+- **Source.** The values come from the payload's `value_entities` (scope-level values) or `entities`, the same fields that build the secret id. An entity missing from the payload gets no label.
+- **Not overridable.** `managed_by` and `parameter_id` are merged last, and nothing else in the payload (for example a `tags` or `labels` object) becomes a label.
+- **Label rules.** GCP label values allow only lowercase letters, digits, `_` and `-`, up to 63 characters. Values are lowercased, any other character becomes `-`, and longer values are truncated to 63. The 12 labels at most stay well under the limit of 64 per secret.
+- **Set on creation only.** Labels are written when the secret is created. Later stores only add versions and leave the labels as they are, so updating a value costs no extra call and needs no `secretmanager.secrets.update` permission.
 
 > **The prefix is part of the name, not of the `external_id`.** Changing `name_prefix` on a provider configuration that already holds values makes every existing parameter answer `404` on retrieve. Treat it as fixed once values exist; to move, re-store the values under the new configuration.
 
