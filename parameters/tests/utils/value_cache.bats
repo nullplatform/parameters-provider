@@ -22,10 +22,10 @@ teardown() {
   unset SERVICE_PATH NP_PARAMETERS_CACHE_TTL_SECS
 }
 
-@test "value_cache: enabled by default with a 60s TTL" {
+@test "value_cache: enabled by default with a 30s TTL" {
   run value_cache_enabled
   assert_equal "$status" "0"
-  assert_equal "$(value_cache_ttl)" "60"
+  assert_equal "$(value_cache_ttl)" "30"
 }
 
 @test "value_cache: TTL 0 disables it" {
@@ -41,7 +41,7 @@ teardown() {
 @test "value_cache: lookup hits a written value" {
   value_cache_write "$GROUP" "$VALUES"
 
-  run value_cache_lookup "$GROUP" "$GROUP/DB_PASSWORD-10"
+  run value_cache_lookup "$GROUP" "$GROUP/DB_PASSWORD-10" "3"
 
   assert_equal "$status" "0"
   assert_equal "$output" "s3cr3t"
@@ -50,13 +50,13 @@ teardown() {
 @test "value_cache: lookup misses a name the group does not hold" {
   value_cache_write "$GROUP" "$VALUES"
 
-  run value_cache_lookup "$GROUP" "$GROUP/OTHER-12"
+  run value_cache_lookup "$GROUP" "$GROUP/OTHER-12" "1"
 
   [ "$status" -ne 0 ]
 }
 
 @test "value_cache: lookup misses when nothing was written for the group" {
-  run value_cache_lookup "$GROUP" "$GROUP/DB_PASSWORD-10"
+  run value_cache_lookup "$GROUP" "$GROUP/DB_PASSWORD-10" "3"
 
   [ "$status" -ne 0 ]
 }
@@ -85,7 +85,7 @@ expire_group() {
   value_cache_write "$GROUP" "$VALUES"
   expire_group "$GROUP"
 
-  run value_cache_lookup "$GROUP" "$GROUP/DB_PASSWORD-10"
+  run value_cache_lookup "$GROUP" "$GROUP/DB_PASSWORD-10" "3"
 
   [ "$status" -ne 0 ]
   [ -e "$(value_cache_file "$GROUP")" ]
@@ -145,7 +145,7 @@ expire_group() {
   values=$(jq -n --arg v "$value" --arg n "$GROUP/CERT-13" '{($n): {value: $v, version: "1"}}')
   value_cache_write "$GROUP" "$values"
 
-  got=$(value_cache_lookup "$GROUP" "$GROUP/CERT-13"; echo x)
+  got=$(value_cache_lookup "$GROUP" "$GROUP/CERT-13" "1"; echo x)
 
   assert_equal "${got%x}" "$value"
 }
@@ -180,6 +180,14 @@ expire_group() {
   value_cache_lock "$GROUP" 8 1
 
   run bash -c "source $PARAMETERS_DIR/utils/value_cache; SERVICE_PATH=$SERVICE_PATH value_cache_lock '$GROUP' 9 1"
+
+  [ "$status" -ne 0 ]
+}
+
+@test "value_cache: a versionless lookup never hits, even for a cached name" {
+  value_cache_write "$GROUP" "$VALUES"
+
+  run value_cache_lookup "$GROUP" "$GROUP/DB_PASSWORD-10"
 
   [ "$status" -ne 0 ]
 }

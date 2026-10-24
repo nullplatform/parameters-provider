@@ -114,6 +114,7 @@ stage_value_cache() {
 
 @test "aws-parameter-store retrieve: fills the value cache from the path and answers from it" {
   stage_value_cache
+  export EXTERNAL_ID_VERSION="3"
 
   run bash -c "$DEPS; source $SCRIPT"
 
@@ -121,7 +122,7 @@ stage_value_cache() {
   assert_equal "$(echo "$output" | jq -r '.value')" "from-path"
   assert_contains "$(cat "$AWS_LOG")" "get-parameters-by-path --region us-east-1 --path /nullplatform/app-1"
   [ "$(grep -c 'get-parameter ' "$AWS_LOG" || true)" = "0" ]
-  cached=$(bash -c "source $SERVICE_PATH/utils/value_cache; value_cache_lookup /nullplatform/app-1 /nullplatform/app-1/API_URL-11")
+  cached=$(bash -c "source $SERVICE_PATH/utils/value_cache; value_cache_lookup /nullplatform/app-1 /nullplatform/app-1/API_URL-11 1")
   assert_equal "$cached" "https://api"
 }
 
@@ -148,6 +149,7 @@ stage_value_cache() {
 
 @test "aws-parameter-store retrieve: by-path denied warns and falls back to get-parameter" {
   stage_value_cache
+  export EXTERNAL_ID_VERSION="3"
 
   run bash -c "$DEPS; MOCK_BY_PATH_MODE=denied source $SCRIPT"
 
@@ -170,6 +172,16 @@ stage_value_cache() {
   stage_value_cache
   export EXTERNAL_ID_VERSION="2"
   bash -c "source $SERVICE_PATH/utils/value_cache; value_cache_write /nullplatform/app-1 '{\"/nullplatform/app-1/DB_PASSWORD-10\":{\"value\":\"cached\",\"version\":\"3\"}}'"
+
+  run bash -c "$DEPS; source $SCRIPT"
+
+  assert_equal "$status" "0"
+  assert_contains "$output" "the-real-value"
+  [ "$(grep -c 'get-parameters-by-path' "$AWS_LOG" || true)" = "0" ]
+}
+
+@test "aws-parameter-store retrieve: a versionless retrieve doesn't fill the cache" {
+  stage_value_cache
 
   run bash -c "$DEPS; source $SCRIPT"
 

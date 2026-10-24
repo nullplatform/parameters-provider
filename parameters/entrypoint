@@ -77,21 +77,25 @@ if [ -f "$ENTRYPOINT_DIR/utils/value_cache" ]; then
      && ! $HAS_OVERRIDE && value_cache_enabled; then
     # shellcheck source=/dev/null # per-provider hook, resolved at runtime
     source "$CACHE_KEY_SCRIPT"
-    answer_from_cache() {
-      local value
-      value=$(value_cache_lookup "$VALUE_CACHE_GROUP" "$VALUE_CACHE_NAME" "$VALUE_CACHE_VERSION") || return 1
-      type -t log >/dev/null 2>&1 && log debug "⚡ retrieve served from the value cache"
-      jq -n --arg value "$value" '{value: $value}'
-    }
-    answer_from_cache && exit 0
-    if ! value_cache_fresh "$VALUE_CACHE_GROUP"; then
-      if value_cache_lock "$VALUE_CACHE_GROUP" 9 "${NP_PARAMETERS_CACHE_WAIT_SECS:-20}"; then
-        answer_from_cache && exit 0
-        # Filled meanwhile without this value: don't make the next waiter queue
-        # behind a lookup the cache can't serve.
-        value_cache_fresh "$VALUE_CACHE_GROUP" && exec 9>&-
-      else
-        type -t log >/dev/null 2>&1 && log warn "⚠️  value cache lock wait timed out; running the full retrieve"
+    # Only version-pinned retrieves can be served from the cache (see
+    # utils/value_cache); a versionless one goes straight to the workflow.
+    if [ -n "$VALUE_CACHE_VERSION" ]; then
+      answer_from_cache() {
+        local value
+        value=$(value_cache_lookup "$VALUE_CACHE_GROUP" "$VALUE_CACHE_NAME" "$VALUE_CACHE_VERSION") || return 1
+        type -t log >/dev/null 2>&1 && log debug "⚡ retrieve served from the value cache"
+        jq -n --arg value "$value" '{value: $value}'
+      }
+      answer_from_cache && exit 0
+      if ! value_cache_fresh "$VALUE_CACHE_GROUP"; then
+        if value_cache_lock "$VALUE_CACHE_GROUP" 9 "${NP_PARAMETERS_CACHE_WAIT_SECS:-20}"; then
+          answer_from_cache && exit 0
+          # Filled meanwhile without this value: don't make the next waiter
+          # queue behind a lookup the cache can't serve.
+          value_cache_fresh "$VALUE_CACHE_GROUP" && exec 9>&-
+        else
+          type -t log >/dev/null 2>&1 && log warn "⚠️  value cache lock wait timed out; running the full retrieve"
+        fi
       fi
     fi
   fi

@@ -16,9 +16,14 @@
 #     Store, the SSM path of the application or scope). One file per group:
 #       $SERVICE_PATH/value-cache/<sha256(group)[:16]>.json
 #       { "_cache_exp_epoch": <int>, "values": { "<name>": { "value": "...", "version": "..." } } }
-#   - Entries expire after NP_PARAMETERS_CACHE_TTL_SECS (default 60). 0 turns
-#     the cache off: every retrieve takes the full workflow, as before.
-#   - A version-pinned lookup only hits when the cached version matches.
+#   - Entries expire after NP_PARAMETERS_CACHE_TTL_SECS (default 30, enough to
+#     cover the retrieves of one deploy). 0 turns the cache off: every
+#     retrieve takes the full workflow, as before.
+#   - Lookups need the exact version and only hit when the cached one matches.
+#     A backend version is immutable, so (name, version) always maps to the
+#     same value and a hit is as correct as reading the backend. A versionless
+#     lookup could only mean "latest", which the cache may have missed by up to
+#     the TTL, so it never hits.
 #   - Files are mode 600 in a 700 dir and are written through tmp + rename, as
 #     in utils/assume_role. They hold secret values in clear text, so expired
 #     files of every group are swept on each write and each entrypoint run
@@ -30,7 +35,7 @@
 # Requires: jq, bash. flock is optional (see value_cache_lock).
 
 value_cache_ttl() {
-  echo "${NP_PARAMETERS_CACHE_TTL_SECS:-60}"
+  echo "${NP_PARAMETERS_CACHE_TTL_SECS:-30}"
 }
 
 # value_cache_enabled — true when the TTL is a positive integer.
@@ -57,10 +62,12 @@ value_cache_file() {
   echo "$(value_cache_dir)/$key.json"
 }
 
-# value_cache_lookup <group> <name> [version]
-# Prints the cached value and returns 0 on a fresh hit; returns 1 otherwise.
+# value_cache_lookup <group> <name> <version>
+# Prints the cached value and returns 0 on a fresh hit of that exact version;
+# returns 1 otherwise, always when <version> is empty (see Model).
 value_cache_lookup() {
   local group="$1" name="$2" version="${3:-}" file now hit
+  [ -n "$version" ] || return 1
   file=$(value_cache_file "$group")
   [ -s "$file" ] || return 1
 
@@ -69,7 +76,7 @@ value_cache_lookup() {
     if (._cache_exp_epoch // 0) <= $now then "expired"
     else (.values[$name] // null) as $e
       | if $e == null then "miss"
-        elif $version != "" and ($e.version | tostring) != $version then "miss"
+        elif ($e.version | tostring) != $version then "miss"
         else "hit:" + ($e.value | @base64)
         end
     end' < "$file" 2>/dev/null) || return 1

@@ -274,3 +274,13 @@ retrieve_context() {
   exec 8>&-
   unset NP_PARAMETERS_CACHE_WAIT_SECS
 }
+
+@test "entrypoint: a versionless retrieve runs the workflow even when the name is cached" {
+  stage_package
+  seed_cache
+  export NP_ACTION_CONTEXT="$(retrieve_context aws-parameter-store 'organization=acme-1/application=app-4/DB_PASSWORD-10')"
+
+  run bash "$PKG/entrypoint"
+
+  assert_contains "$output" "service workflow exec"
+}
