@@ -106,6 +106,11 @@ value_cache_write() {
 # its copy of <fd> before sleeping and kills the flock on timeout. No polling:
 # a waiter is two sleeping processes. The lock lives on the open file
 # description, so it stays with this shell after the background flock exits.
+#
+# The watchdog writes to /dev/null and takes its sleep down with it when
+# killed: the agent treats a command as finished only once every holder of its
+# stdout/stderr exits, so a leftover `sleep <wait>` would hold each retrieve's
+# response for the full wait.
 value_cache_lock() {
   local group="$1" fd="$2" wait="$3" dir flock_pid watchdog_pid rc
   command -v flock >/dev/null 2>&1 || return 0
@@ -116,7 +121,12 @@ value_cache_lock() {
 
   flock -x "$fd" &
   flock_pid=$!
-  ( eval "exec $fd>&-"; sleep "$wait"; kill "$flock_pid" 2>/dev/null ) &
+  (
+    eval "exec $fd>&-"
+    trap 'kill "$sleep_pid" 2>/dev/null; exit 0' TERM
+    sleep "$wait" & sleep_pid=$!
+    wait "$sleep_pid" && kill "$flock_pid" 2>/dev/null
+  ) </dev/null >/dev/null 2>&1 &
   watchdog_pid=$!
   rc=0
   wait "$flock_pid" || rc=$?

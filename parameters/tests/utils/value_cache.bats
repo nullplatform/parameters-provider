@@ -108,6 +108,16 @@ teardown() {
   [ "$(value_cache_file "$GROUP")" != "$(value_cache_file "$GROUP/scope_dev-5")" ]
 }
 
+@test "value_cache: taking a free lock does not hold the caller's output open for the wait" {
+  command -v flock >/dev/null 2>&1 || skip "flock not installed"
+  # The agent waits for every holder of the command's stdout to exit; a
+  # leftover watchdog sleep would delay the response by the whole wait.
+  start=$SECONDS
+  bash -c "source $PARAMETERS_DIR/utils/value_cache; SERVICE_PATH=$SERVICE_PATH value_cache_lock '$GROUP' 9 10; echo done" | cat > /dev/null
+
+  [ $(( SECONDS - start )) -lt 5 ]
+}
+
 @test "value_cache: lock times out while another process holds it" {
   command -v flock >/dev/null 2>&1 || skip "flock not installed"
   value_cache_lock "$GROUP" 8 1
