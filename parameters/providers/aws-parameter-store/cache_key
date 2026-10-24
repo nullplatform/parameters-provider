@@ -1,0 +1,22 @@
+#!/bin/bash
+# Sourceable — maps a retrieve to its value-cache entry (see utils/value_cache),
+# from the notification alone: no np, aws or credentials, so the entrypoint can
+# answer cache hits before the workflow starts.
+#
+# The group is the SSM path holding the value, i.e. every value of the same
+# application (or scope), which retrieve reads in one get-parameters-by-path.
+# The name rules match retrieve: `=` becomes `_` and the prefix is setup's
+# invariant PS_NAME_PREFIX.
+#
+# Input:   CONTEXT (set by the entrypoint)
+# Exports: VALUE_CACHE_GROUP, VALUE_CACHE_NAME, VALUE_CACHE_VERSION
+
+_ck_external_id=$(echo "$CONTEXT" | jq -r '.external_id // empty')
+_ck_path="${_ck_external_id%%#*}"
+
+VALUE_CACHE_VERSION=""
+[[ "$_ck_external_id" == *"#"* ]] && VALUE_CACHE_VERSION="${_ck_external_id##*#}"
+VALUE_CACHE_NAME="/nullplatform/${_ck_path//=/_}"
+VALUE_CACHE_GROUP="${VALUE_CACHE_NAME%/*}"
+
+export VALUE_CACHE_GROUP VALUE_CACHE_NAME VALUE_CACHE_VERSION

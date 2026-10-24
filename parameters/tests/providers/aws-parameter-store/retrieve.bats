@@ -16,6 +16,18 @@ setup() {
   cat > "$BATS_TEST_TMPDIR/bin/aws" << 'EOF'
 #!/bin/bash
 echo "ARGS: $@" >> "$AWS_LOG"
+if [ "$2" = "get-parameters-by-path" ]; then
+  case "${MOCK_BY_PATH_MODE:-success}" in
+    success)
+      echo '[{"n":"/nullplatform/app-1/DB_PASSWORD-10","v":"from-path","ver":3},{"n":"/nullplatform/app-1/API_URL-11","v":"https://api","ver":1}]'
+      ;;
+    denied)
+      echo "An error occurred (AccessDeniedException) when calling the GetParametersByPath operation." >&2
+      exit 254
+      ;;
+  esac
+  exit 0
+fi
 case "${MOCK_AWS_MODE:-success}" in
   success)
     echo "the-real-value"
@@ -87,4 +99,69 @@ EOF
   assert_contains "$captured" "--region us-east-1"
   assert_contains "$captured" "--name /nullplatform/abc-123"
   assert_contains "$captured" "--with-decryption"
+}
+
+# --- Value cache fill (utils/value_cache) -------------------------------------
+# A SERVICE_PATH holding utils/value_cache turns the cache on; the cache files
+# land under it, so each test gets its own.
+
+stage_value_cache() {
+  export SERVICE_PATH="$BATS_TEST_TMPDIR/service"
+  mkdir -p "$SERVICE_PATH/utils"
+  cp "$PARAMETERS_DIR/utils/value_cache" "$SERVICE_PATH/utils/"
+  export EXTERNAL_ID_PATH="app-1/DB_PASSWORD-10"
+}
+
+@test "aws-parameter-store retrieve: fills the value cache from the path and answers from it" {
+  stage_value_cache
+
+  run bash -c "$DEPS; source $SCRIPT"
+
+  assert_equal "$status" "0"
+  assert_equal "$(echo "$output" | jq -r '.value')" "from-path"
+  assert_contains "$(cat "$AWS_LOG")" "get-parameters-by-path --region us-east-1 --path /nullplatform/app-1"
+  [ "$(grep -c 'get-parameter ' "$AWS_LOG" || true)" = "0" ]
+  cached=$(bash -c "source $SERVICE_PATH/utils/value_cache; value_cache_lookup /nullplatform/app-1 /nullplatform/app-1/API_URL-11")
+  assert_equal "$cached" "https://api"
+}
+
+@test "aws-parameter-store retrieve: version-pinned retrieve answers from the path when versions match" {
+  stage_value_cache
+  export EXTERNAL_ID_VERSION="3"
+
+  run bash -c "$DEPS; source $SCRIPT"
+
+  assert_equal "$status" "0"
+  assert_equal "$(echo "$output" | jq -r '.value')" "from-path"
+}
+
+@test "aws-parameter-store retrieve: version mismatch falls back to get-parameter with :version" {
+  stage_value_cache
+  export EXTERNAL_ID_VERSION="2"
+
+  run bash -c "$DEPS; source $SCRIPT"
+
+  assert_equal "$status" "0"
+  assert_equal "$(echo "$output" | jq -r '.value')" "the-real-value"
+  assert_contains "$(cat "$AWS_LOG")" "--name /nullplatform/app-1/DB_PASSWORD-10:2"
+}
+
+@test "aws-parameter-store retrieve: by-path denied warns and falls back to get-parameter" {
+  stage_value_cache
+
+  run bash -c "$DEPS; MOCK_BY_PATH_MODE=denied source $SCRIPT"
+
+  assert_equal "$status" "0"
+  assert_contains "$output" "value cache fill failed"
+  assert_contains "$output" "the-real-value"
+}
+
+@test "aws-parameter-store retrieve: TTL 0 skips the cache fill" {
+  stage_value_cache
+
+  run bash -c "$DEPS; NP_PARAMETERS_CACHE_TTL_SECS=0 source $SCRIPT"
+
+  assert_equal "$status" "0"
+  assert_contains "$output" "the-real-value"
+  [ "$(grep -c 'get-parameters-by-path' "$AWS_LOG" || true)" = "0" ]
 }

@@ -20,6 +20,37 @@ PARAM_NAME="${PS_NAME_PREFIX}${EXTERNAL_ID_PATH//=/_}"
 LOOKUP_NAME="$PARAM_NAME"
 [ -n "${EXTERNAL_ID_VERSION:-}" ] && LOOKUP_NAME="${PARAM_NAME}:${EXTERNAL_ID_VERSION}"
 
+# Value cache fill (see utils/value_cache and ./cache_key): read every value
+# under this parameter's path in one paginated get-parameters-by-path, so the
+# rest of the deploy's retrieves are answered by the entrypoint from disk. Any
+# failure here (e.g. a role without ssm:GetParametersByPath) only logs and
+# falls through to the single get-parameter below, as before.
+if [ -n "${SERVICE_PATH:-}" ] && [ -f "$SERVICE_PATH/utils/value_cache" ]; then
+  source "$SERVICE_PATH/utils/value_cache"
+  if value_cache_enabled; then
+    _vc_group="${PARAM_NAME%/*}"
+    _vc_err=$(mktemp)
+    if _vc_values=$(aws ssm get-parameters-by-path \
+            --region "$AWS_REGION" \
+            --path "$_vc_group" \
+            --with-decryption \
+            --query 'Parameters[].{n: Name, v: Value, ver: Version}' \
+            --output json 2>"$_vc_err" \
+          | jq -c 'map({key: .n, value: {value: .v, version: (.ver | tostring)}}) | from_entries'); then
+      value_cache_write "$_vc_group" "$_vc_values" \
+        && log debug "🗂️  value cache filled with $(jq 'length' <<<"$_vc_values") values from $_vc_group"
+      if VALUE=$(value_cache_lookup "$_vc_group" "$PARAM_NAME" "${EXTERNAL_ID_VERSION:-}"); then
+        rm -f "$_vc_err"
+        jq -n --arg value "$VALUE" '{value: $value}'
+        exit 0
+      fi
+    else
+      log warn "⚠️  value cache fill failed, using get-parameter: $(cat "$_vc_err")"
+    fi
+    rm -f "$_vc_err"
+  fi
+fi
+
 err_file=$(mktemp)
 if VALUE=$(aws ssm get-parameter \
         --region "$AWS_REGION" \

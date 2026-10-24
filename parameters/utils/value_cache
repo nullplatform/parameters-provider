@@ -1,0 +1,110 @@
+#!/bin/bash
+# Sourceable library — a short-lived on-disk cache of retrieved values, shared
+# by every retrieve the agent runs at the same time.
+#
+# Why
+#   The platform sends one parameter:retrieve per value, all at once, when a
+#   deploy (or its rollback) resolves its parameters. Each one runs the full
+#   workflow (np, aws-cli, jq), ~35Mi and ~2s of CPU, so a deploy with 64
+#   values runs 64 of them in parallel and can exhaust the node. A provider that
+#   can read every value of a group in one call (e.g. a Parameter Store path)
+#   fills this cache once; the other retrieves are answered from it by the
+#   entrypoint, before the workflow starts.
+#
+# Model
+#   - A "group" is a provider-defined key covering many values (for Parameter
+#     Store, the SSM path of the application or scope). One file per group:
+#       $SERVICE_PATH/value-cache/<sha256(group)[:16]>.json
+#       { "_cache_exp_epoch": <int>, "values": { "<name>": { "value": "...", "version": "..." } } }
+#   - Entries expire after NP_PARAMETERS_CACHE_TTL_SECS (default 60). 0 turns
+#     the cache off: every retrieve takes the full workflow, as before.
+#   - A version-pinned lookup only hits when the cached version matches.
+#   - Files are mode 600 in a 700 dir and are written through tmp + rename, as
+#     in utils/assume_role. They hold secret values in clear text, which is why
+#     the TTL is short and expired files are removed on read.
+#
+# Requires: jq, bash. flock is optional (see value_cache_lock).
+
+value_cache_ttl() {
+  echo "${NP_PARAMETERS_CACHE_TTL_SECS:-60}"
+}
+
+# value_cache_enabled — true when the TTL is a positive integer.
+value_cache_enabled() {
+  local ttl
+  ttl=$(value_cache_ttl)
+  [[ "$ttl" =~ ^[0-9]+$ ]] && [ "$ttl" -gt 0 ]
+}
+
+value_cache_dir() {
+  : "${SERVICE_PATH:?SERVICE_PATH must be set (the agent runtime supplies this)}"
+  echo "$SERVICE_PATH/value-cache"
+}
+
+# value_cache_file <group> — path of the group's cache file (may not exist).
+value_cache_file() {
+  local group="$1" key
+  # GNU coreutils first, macOS shasum as fallback (local smoke tests).
+  if command -v sha256sum >/dev/null 2>&1; then
+    key=$(printf '%s' "$group" | sha256sum | cut -c1-16)
+  else
+    key=$(printf '%s' "$group" | shasum -a 256 | cut -c1-16)
+  fi
+  echo "$(value_cache_dir)/$key.json"
+}
+
+# value_cache_lookup <group> <name> [version]
+# Prints the cached value and returns 0 on a fresh hit; returns 1 otherwise.
+# An expired file is deleted so stale secrets don't linger on disk.
+value_cache_lookup() {
+  local group="$1" name="$2" version="${3:-}" file now hit
+  file=$(value_cache_file "$group")
+  [ -s "$file" ] || return 1
+
+  now=$(date -u +%s)
+  hit=$(jq -r --arg name "$name" --arg version "$version" --argjson now "$now" '
+    if (._cache_exp_epoch // 0) <= $now then "expired"
+    else (.values[$name] // null) as $e
+      | if $e == null then "miss"
+        elif $version != "" and ($e.version | tostring) != $version then "miss"
+        else "hit:" + ($e.value | @base64)
+        end
+    end' < "$file" 2>/dev/null) || return 1
+
+  case "$hit" in
+    expired) rm -f "$file"; return 1 ;;
+    hit:*)   printf '%s' "${hit#hit:}" | base64 -d; return 0 ;;
+    *)       return 1 ;;
+  esac
+}
+
+# value_cache_write <group> <values_json>
+# values_json: { "<name>": { "value": "...", "version": "..." }, ... }
+value_cache_write() {
+  local group="$1" values="$2" dir file tmp exp
+  dir=$(value_cache_dir)
+  file=$(value_cache_file "$group")
+  exp=$(( $(date -u +%s) + $(value_cache_ttl) ))
+
+  mkdir -p "$dir"
+  chmod 700 "$dir" 2>/dev/null || true
+  tmp="$file.$$"
+  ( umask 077; jq -n --argjson values "$values" --argjson exp "$exp" \
+      '{_cache_exp_epoch: $exp, values: $values}' > "$tmp" ) || { rm -f "$tmp"; return 1; }
+  mv -f "$tmp" "$file"
+}
+
+# value_cache_lock <group> <fd> <wait_secs>
+# Takes an exclusive lock on the group, so concurrent retrieves wait for the
+# one filling the cache instead of all going to the backend. Holds it on <fd>
+# until that fd is closed (or the process exits). Returns 1 on timeout. Without
+# flock (e.g. macOS smoke tests) it returns 0 without locking.
+value_cache_lock() {
+  local group="$1" fd="$2" wait="$3" dir
+  command -v flock >/dev/null 2>&1 || return 0
+  dir=$(value_cache_dir)
+  mkdir -p "$dir"
+  chmod 700 "$dir" 2>/dev/null || true
+  eval "exec $fd>\"\$(value_cache_file \"\$group\").lock\""
+  flock -w "$wait" "$fd"
+}

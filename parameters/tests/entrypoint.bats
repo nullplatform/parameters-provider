@@ -151,3 +151,94 @@ teardown() {
   assert_equal "$status" "0"
   [[ "$output" != *"--overrides $BATS_TEST_TMPDIR/empty_override"* ]]
 }
+
+# --- Retrieve fast path (utils/value_cache) -----------------------------------
+# The entrypoint uses its own directory as SERVICE_PATH, so these tests run a
+# staged copy of the package: the cache files then land in the test's tmpdir.
+
+stage_package() {
+  PKG="$BATS_TEST_TMPDIR/pkg"
+  mkdir -p "$PKG/utils" "$PKG/workflows" "$PKG/providers/aws-parameter-store" "$PKG/providers/no-cache"
+  cp "$PARAMETERS_DIR/entrypoint" "$PKG/"
+  cp "$PARAMETERS_DIR/utils/log" "$PARAMETERS_DIR/utils/value_cache" "$PKG/utils/"
+  cp "$PARAMETERS_DIR/providers/aws-parameter-store/cache_key" "$PKG/providers/aws-parameter-store/"
+  : > "$PKG/workflows/retrieve.yaml"
+  GROUP="/nullplatform/organization_acme-1/application_app-4"
+  NAME="$GROUP/DB_PASSWORD-10"
+}
+
+seed_cache() {
+  bash -c "source $PKG/utils/value_cache; SERVICE_PATH=$PKG value_cache_write '$GROUP' '{\"$NAME\":{\"value\":\"cached\",\"version\":\"3\"}}'"
+}
+
+retrieve_context() {
+  local slug="${1:-aws-parameter-store}" external_id="${2:-organization=acme-1/application=app-4/DB_PASSWORD-10#3}"
+  echo "{\"notification\":{\"action\":\"parameter:retrieve\",\"external_id\":\"$external_id\",\"provider\":{\"specification_slug\":\"$slug\"}}}"
+}
+
+@test "entrypoint: retrieve cache hit answers without running the workflow" {
+  stage_package
+  seed_cache
+  export NP_ACTION_CONTEXT="$(retrieve_context)"
+
+  run bash "$PKG/entrypoint"
+
+  assert_equal "$status" "0"
+  assert_equal "$(echo "$output" | jq -r '.value')" "cached"
+  [[ "$output" != *"service workflow exec"* ]]
+}
+
+@test "entrypoint: retrieve cache miss runs the workflow" {
+  stage_package
+  export NP_ACTION_CONTEXT="$(retrieve_context)"
+
+  run bash "$PKG/entrypoint"
+
+  assert_equal "$status" "0"
+  assert_contains "$output" "service workflow exec --no-output --workflow $PKG/workflows/retrieve.yaml"
+}
+
+@test "entrypoint: retrieve with another cached version runs the workflow" {
+  stage_package
+  seed_cache
+  export NP_ACTION_CONTEXT="$(retrieve_context aws-parameter-store 'organization=acme-1/application=app-4/DB_PASSWORD-10#2')"
+
+  run bash "$PKG/entrypoint"
+
+  assert_contains "$output" "service workflow exec"
+}
+
+@test "entrypoint: provider without cache_key always runs the workflow" {
+  stage_package
+  seed_cache
+  export NP_ACTION_CONTEXT="$(retrieve_context no-cache)"
+
+  run bash "$PKG/entrypoint"
+
+  assert_contains "$output" "service workflow exec"
+}
+
+@test "entrypoint: a retrieve workflow override disables the cache" {
+  stage_package
+  seed_cache
+  mkdir -p "$BATS_TEST_TMPDIR/overrides/parameters/workflows"
+  : > "$BATS_TEST_TMPDIR/overrides/parameters/workflows/retrieve.yaml"
+  export OVERRIDES_PATH="$BATS_TEST_TMPDIR/overrides"
+  export NP_ACTION_CONTEXT="$(retrieve_context)"
+
+  run bash "$PKG/entrypoint"
+
+  assert_contains "$output" "--overrides $BATS_TEST_TMPDIR/overrides/parameters/workflows/retrieve.yaml"
+}
+
+@test "entrypoint: TTL 0 disables the cache" {
+  stage_package
+  seed_cache
+  export NP_PARAMETERS_CACHE_TTL_SECS=0
+  export NP_ACTION_CONTEXT="$(retrieve_context)"
+
+  run bash "$PKG/entrypoint"
+
+  assert_contains "$output" "service workflow exec"
+  unset NP_PARAMETERS_CACHE_TTL_SECS
+}
