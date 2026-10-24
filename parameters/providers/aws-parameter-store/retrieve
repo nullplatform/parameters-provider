@@ -11,10 +11,11 @@ set -euo pipefail
 #
 # Required env: EXTERNAL_ID, AWS_REGION, PS_NAME_PREFIX
 
-# EXTERNAL_ID_PATH and EXTERNAL_ID_VERSION are set by build_context.
-# SSM path components only accept [A-Za-z0-9._-]; `=` is replaced with `_`
-# (same transformation as store).
-PARAM_NAME="${PS_NAME_PREFIX}${EXTERNAL_ID_PATH//=/_}"
+# EXTERNAL_ID_PATH and EXTERNAL_ID_VERSION are set by build_context. The SSM
+# name comes from ./naming, the same rule cache_key uses.
+# shellcheck source=parameters/providers/aws-parameter-store/naming
+source "$(dirname "${BASH_SOURCE[0]}")/naming"
+PARAM_NAME=$(ps_parameter_name "$EXTERNAL_ID_PATH")
 
 # PS addresses historical versions by suffixing `:<version>` to the parameter name.
 LOOKUP_NAME="$PARAM_NAME"
@@ -24,11 +25,13 @@ LOOKUP_NAME="$PARAM_NAME"
 # under this parameter's path in one paginated get-parameters-by-path, so the
 # rest of the deploy's retrieves are answered by the entrypoint from disk. Any
 # failure here (e.g. a role without ssm:GetParametersByPath) only logs and
-# falls through to the single get-parameter below, as before.
+# falls through to the single get-parameter below, as before. A path already
+# cached means the cache can't serve this value (e.g. an older version), so
+# re-reading it would only repeat the whole path per such retrieve.
 if [ -n "${SERVICE_PATH:-}" ] && [ -f "$SERVICE_PATH/utils/value_cache" ]; then
   source "$SERVICE_PATH/utils/value_cache"
-  if value_cache_enabled; then
-    _vc_group="${PARAM_NAME%/*}"
+  _vc_group="${PARAM_NAME%/*}"
+  if value_cache_enabled && ! value_cache_fresh "$_vc_group"; then
     _vc_err=$(mktemp)
     if _vc_values=$(aws ssm get-parameters-by-path \
             --region "$AWS_REGION" \

@@ -25,7 +25,8 @@ ASSUME_ROLE_DEFAULT_ENV="PARAMETER_STORE_ASSUME_ROLE_ARN_DEFAULT"
 ASSUME_ROLE_SESSION_PREFIX="np-parameter-store"
 source "$PARAMETERS_ROOT/utils/assume_role_step"
 
-PS_NAME_PREFIX="/nullplatform/"
+# shellcheck source=parameters/providers/aws-parameter-store/naming
+source "$(dirname "${BASH_SOURCE[0]}")/naming"
 
 PS_KMS_KEY_ID=$(get_config_value \
   --provider '.setup.kms_key_id' \

@@ -165,3 +165,15 @@ stage_value_cache() {
   assert_contains "$output" "the-real-value"
   [ "$(grep -c 'get-parameters-by-path' "$AWS_LOG" || true)" = "0" ]
 }
+
+@test "aws-parameter-store retrieve: a group already cached is not read again" {
+  stage_value_cache
+  export EXTERNAL_ID_VERSION="2"
+  bash -c "source $SERVICE_PATH/utils/value_cache; value_cache_write /nullplatform/app-1 '{\"/nullplatform/app-1/DB_PASSWORD-10\":{\"value\":\"cached\",\"version\":\"3\"}}'"
+
+  run bash -c "$DEPS; source $SCRIPT"
+
+  assert_equal "$status" "0"
+  assert_contains "$output" "the-real-value"
+  [ "$(grep -c 'get-parameters-by-path' "$AWS_LOG" || true)" = "0" ]
+}

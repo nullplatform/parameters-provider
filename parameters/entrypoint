@@ -61,15 +61,20 @@ fi
 # Retrieve fast path (see utils/value_cache). Only for providers that ship a
 # cache_key, and never when a consumer overrides the retrieve workflow (the
 # cache would bypass it). A miss takes the group lock and re-checks: if another
-# retrieve filled the cache meanwhile, answer from it; otherwise keep the lock
-# while this run's workflow fills it, so the concurrent ones wait on a sleeping
-# bash instead of each running the full workflow.
+# retrieve filled the cache meanwhile, answer from it; if the group is cached
+# but can't serve this value (e.g. an older version), drop the lock and run the
+# workflow alongside the others; otherwise keep the lock while this run's
+# workflow fills the cache, so the concurrent ones wait on a sleeping bash
+# instead of each running the full workflow.
 ACTIVE_SLUG=$(echo "$CONTEXT" | jq -r '.provider.specification_slug // empty')
 CACHE_KEY_SCRIPT="$ENTRYPOINT_DIR/providers/$ACTIVE_SLUG/cache_key"
-if [ "$ACTION_TO_EXECUTE" = "retrieve" ] && [ -n "$ACTIVE_SLUG" ] && [ -f "$CACHE_KEY_SCRIPT" ] \
-   && ! $HAS_OVERRIDE && [ -f "$ENTRYPOINT_DIR/utils/value_cache" ]; then
+if [ -f "$ENTRYPOINT_DIR/utils/value_cache" ]; then
   source "$ENTRYPOINT_DIR/utils/value_cache"
-  if value_cache_enabled; then
+  # Clear expired values of every group on any action, so cached secrets don't
+  # outlive their TTL waiting for their own group to be read again.
+  value_cache_enabled && value_cache_sweep
+  if [ "$ACTION_TO_EXECUTE" = "retrieve" ] && [ -n "$ACTIVE_SLUG" ] && [ -f "$CACHE_KEY_SCRIPT" ] \
+     && ! $HAS_OVERRIDE && value_cache_enabled; then
     # shellcheck source=/dev/null # per-provider hook, resolved at runtime
     source "$CACHE_KEY_SCRIPT"
     answer_from_cache() {
@@ -79,10 +84,15 @@ if [ "$ACTION_TO_EXECUTE" = "retrieve" ] && [ -n "$ACTIVE_SLUG" ] && [ -f "$CACH
       jq -n --arg value "$value" '{value: $value}'
     }
     answer_from_cache && exit 0
-    if value_cache_lock "$VALUE_CACHE_GROUP" 9 "${NP_PARAMETERS_CACHE_WAIT_SECS:-20}"; then
-      answer_from_cache && exit 0
-    else
-      type -t log >/dev/null 2>&1 && log warn "⚠️  value cache lock wait timed out; running the full retrieve"
+    if ! value_cache_fresh "$VALUE_CACHE_GROUP"; then
+      if value_cache_lock "$VALUE_CACHE_GROUP" 9 "${NP_PARAMETERS_CACHE_WAIT_SECS:-20}"; then
+        answer_from_cache && exit 0
+        # Filled meanwhile without this value: don't make the next waiter queue
+        # behind a lookup the cache can't serve.
+        value_cache_fresh "$VALUE_CACHE_GROUP" && exec 9>&-
+      else
+        type -t log >/dev/null 2>&1 && log warn "⚠️  value cache lock wait timed out; running the full retrieve"
+      fi
     fi
   fi
 fi

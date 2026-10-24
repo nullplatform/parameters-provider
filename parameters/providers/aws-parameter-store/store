@@ -18,11 +18,11 @@ set -euo pipefail
 source "$PARAMETERS_ROOT/utils/build_external_id"
 build_external_id
 
-# SSM Parameter Store path components only accept [A-Za-z0-9._-]. The canonical
-# external_id uses `=` to bind entities (organization=acme-1, ...); replace
-# with `_` to satisfy SSM. EXTERNAL_ID itself (returned to the platform) keeps
-# the canonical form — retrieve/delete apply the same transformation.
-PARAM_NAME="${PS_NAME_PREFIX}${EXTERNAL_ID//=/_}"
+# SSM name from ./naming (`=` becomes `_`). EXTERNAL_ID itself (returned to the
+# platform) keeps the canonical form; retrieve/delete/cache_key map it the same way.
+# shellcheck source=parameters/providers/aws-parameter-store/naming
+source "$(dirname "${BASH_SOURCE[0]}")/naming"
+PARAM_NAME=$(ps_parameter_name "$EXTERNAL_ID")
 
 SSM_TYPE="String"
 [ "${PARAMETER_KIND:-}" = "secret" ] && SSM_TYPE="SecureString"

@@ -72,15 +72,72 @@ teardown() {
   [ "$status" -ne 0 ]
 }
 
-@test "value_cache: an expired file misses and is removed" {
-  value_cache_write "$GROUP" "$VALUES"
-  file=$(value_cache_file "$GROUP")
+# Helper: age a group's cache file past its TTL (both the stored expiry, which
+# lookups read, and the mtime, which the sweep reads).
+expire_group() {
+  local file
+  file=$(value_cache_file "$1")
   jq '._cache_exp_epoch = 1577836800' "$file" > "$file.tmp" && mv "$file.tmp" "$file"
+  touch -t 202001010000 "$file"
+}
+
+@test "value_cache: an expired file misses but lookup leaves it for the sweep" {
+  value_cache_write "$GROUP" "$VALUES"
+  expire_group "$GROUP"
 
   run value_cache_lookup "$GROUP" "$GROUP/DB_PASSWORD-10"
 
   [ "$status" -ne 0 ]
-  [ ! -e "$file" ]
+  [ -e "$(value_cache_file "$GROUP")" ]
+}
+
+@test "value_cache: fresh is true for an unexpired group only" {
+  run value_cache_fresh "$GROUP"
+  [ "$status" -ne 0 ]
+
+  value_cache_write "$GROUP" "$VALUES"
+  run value_cache_fresh "$GROUP"
+  assert_equal "$status" "0"
+
+  expire_group "$GROUP"
+  run value_cache_fresh "$GROUP"
+  [ "$status" -ne 0 ]
+}
+
+@test "value_cache: sweep removes expired files of every group and keeps fresh ones" {
+  other="/nullplatform/organization_acme-1/application_other-9"
+  value_cache_write "$GROUP" "$VALUES"
+  value_cache_write "$other" "$VALUES"
+  expire_group "$other"
+  : > "$(value_cache_file "$other").12345"
+  touch -t 202001010000 "$(value_cache_file "$other").12345"
+
+  value_cache_sweep
+
+  [ -e "$(value_cache_file "$GROUP")" ]
+  [ ! -e "$(value_cache_file "$other")" ]
+  [ ! -e "$(value_cache_file "$other").12345" ]
+}
+
+@test "value_cache: write sweeps other groups' expired files" {
+  other="/nullplatform/organization_acme-1/application_other-9"
+  value_cache_write "$other" "$VALUES"
+  expire_group "$other"
+
+  value_cache_write "$GROUP" "$VALUES"
+
+  [ ! -e "$(value_cache_file "$other")" ]
+}
+
+@test "value_cache: sweep skips a group whose lock is held" {
+  command -v flock >/dev/null 2>&1 || skip "flock not installed"
+  value_cache_write "$GROUP" "$VALUES"
+  expire_group "$GROUP"
+  value_cache_lock "$GROUP" 9 1
+
+  bash -c "source $PARAMETERS_DIR/utils/value_cache; SERVICE_PATH=$SERVICE_PATH value_cache_sweep"
+
+  [ -e "$(value_cache_file "$GROUP")" ]
 }
 
 @test "value_cache: multiline and quoted values round-trip unchanged" {

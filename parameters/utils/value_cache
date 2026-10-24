@@ -20,8 +20,12 @@
 #     the cache off: every retrieve takes the full workflow, as before.
 #   - A version-pinned lookup only hits when the cached version matches.
 #   - Files are mode 600 in a 700 dir and are written through tmp + rename, as
-#     in utils/assume_role. They hold secret values in clear text, which is why
-#     the TTL is short and expired files are removed on read.
+#     in utils/assume_role. They hold secret values in clear text, so expired
+#     files of every group are swept on each write and each entrypoint run
+#     (value_cache_sweep), not only when their own group is read again.
+#   - Lookups never delete: a reader that found an expired file could
+#     otherwise remove the fresh one a writer had just renamed into place. The
+#     sweep removes a file only while holding that group's lock.
 #
 # Requires: jq, bash. flock is optional (see value_cache_lock).
 
@@ -55,7 +59,6 @@ value_cache_file() {
 
 # value_cache_lookup <group> <name> [version]
 # Prints the cached value and returns 0 on a fresh hit; returns 1 otherwise.
-# An expired file is deleted so stale secrets don't linger on disk.
 value_cache_lookup() {
   local group="$1" name="$2" version="${3:-}" file now hit
   file=$(value_cache_file "$group")
@@ -72,10 +75,52 @@ value_cache_lookup() {
     end' < "$file" 2>/dev/null) || return 1
 
   case "$hit" in
-    expired) rm -f "$file"; return 1 ;;
-    hit:*)   printf '%s' "${hit#hit:}" | base64 -d; return 0 ;;
-    *)       return 1 ;;
+    hit:*) printf '%s' "${hit#hit:}" | base64 -d; return 0 ;;
+    *)     return 1 ;;
   esac
+}
+
+# value_cache_fresh <group> — true when the group has an unexpired file. A miss
+# on a fresh group means the cache can't serve that value (another version, or
+# a name outside the path), so waiting on the group lock again won't help.
+value_cache_fresh() {
+  local file
+  file=$(value_cache_file "$1")
+  [ -s "$file" ] || return 1
+  jq -e --argjson now "$(date -u +%s)" '(._cache_exp_epoch // 0) > $now' < "$file" >/dev/null 2>&1
+}
+
+# value_cache_sweep — removes expired cache files of every group, plus temp
+# files left by an interrupted write. Age comes from the file's mtime (its
+# write time), so no file needs parsing. Each removal holds that group's lock
+# (fd 7, non-blocking): a group being refilled is skipped, and so is the
+# caller's own group when it holds that lock. Without flock it just removes.
+value_cache_sweep() {
+  local dir ttl now f lock
+  dir=$(value_cache_dir)
+  [ -d "$dir" ] || return 0
+  ttl=$(value_cache_ttl)
+  now=$(date +%s)
+  for f in "$dir"/*.json "$dir"/*.json.*; do
+    [ -f "$f" ] || continue
+    [ $(( now - $(date -r "$f" +%s) )) -ge "$ttl" ] || continue
+    case "$f" in
+      *.json)
+        lock="$f.lock"
+        if command -v flock >/dev/null 2>&1; then
+          exec 7>"$lock"
+          flock -n 7 || { exec 7>&-; continue; }
+          # Re-check under the lock: a writer may have renamed a fresh file in.
+          [ $(( $(date +%s) - $(date -r "$f" +%s 2>/dev/null || echo "$now") )) -ge "$ttl" ] && rm -f "$f"
+          exec 7>&-
+        else
+          rm -f "$f"
+        fi
+        ;;
+      *) rm -f "$f" ;;
+    esac
+  done
+  return 0
 }
 
 # value_cache_write <group> <values_json>
@@ -92,6 +137,7 @@ value_cache_write() {
   ( umask 077; jq -n --argjson values "$values" --argjson exp "$exp" \
       '{_cache_exp_epoch: $exp, values: $values}' > "$tmp" ) || { rm -f "$tmp"; return 1; }
   mv -f "$tmp" "$file"
+  value_cache_sweep
 }
 
 # value_cache_lock <group> <fd> <wait_secs>
