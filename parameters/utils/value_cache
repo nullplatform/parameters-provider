@@ -99,12 +99,27 @@ value_cache_write() {
 # one filling the cache instead of all going to the backend. Holds it on <fd>
 # until that fd is closed (or the process exits). Returns 1 on timeout. Without
 # flock (e.g. macOS smoke tests) it returns 0 without locking.
+#
+# The agent image ships BusyBox flock, which has no -w, and BusyBox timeout's
+# watcher inherits <fd> and keeps the lock until the timeout expires. So the
+# wait is a blocking `flock -x` in the background plus a watchdog that closes
+# its copy of <fd> before sleeping and kills the flock on timeout. No polling:
+# a waiter is two sleeping processes. The lock lives on the open file
+# description, so it stays with this shell after the background flock exits.
 value_cache_lock() {
-  local group="$1" fd="$2" wait="$3" dir
+  local group="$1" fd="$2" wait="$3" dir flock_pid watchdog_pid rc
   command -v flock >/dev/null 2>&1 || return 0
   dir=$(value_cache_dir)
   mkdir -p "$dir"
   chmod 700 "$dir" 2>/dev/null || true
   eval "exec $fd>\"\$(value_cache_file \"\$group\").lock\""
-  flock -w "$wait" "$fd"
+
+  flock -x "$fd" &
+  flock_pid=$!
+  ( eval "exec $fd>&-"; sleep "$wait"; kill "$flock_pid" 2>/dev/null ) &
+  watchdog_pid=$!
+  rc=0
+  wait "$flock_pid" || rc=$?
+  kill "$watchdog_pid" 2>/dev/null || true
+  return "$rc"
 }
