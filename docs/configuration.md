@@ -109,14 +109,14 @@ The shape of `$CONTEXT.provider.attributes` for each provider:
 
 `kms_key_id` only matters for `kind=secret` (SecureString). `tier` ∈ {`Standard`, `Advanced`, `Intelligent-Tiering`}.
 
-**Value cache.** The platform sends one `parameter:retrieve` per value, all at once, when a deploy resolves its parameters. The first retrieve of an application (or scope) reads every value under its SSM path with one `get-parameters-by-path` and keeps them on disk for a short TTL; the entrypoint answers the rest from there, before the workflow starts, and concurrent misses wait for that first read instead of each running the full workflow. Only version-pinned retrieves (`external_id` ending in `#<version>`, which is what `store` returns) are served from the cache, and only when the cached version matches: SSM versions are immutable, so a hit is the same value SSM would return. Versionless retrieves, retrieves that pin a version the cache doesn't hold (they run alongside the others instead of waiting), and consumers that override the `retrieve` workflow take the full workflow as before. Without `ssm:GetParametersByPath` the cache fill fails and retrieve falls back to `get-parameter`. Agent environment:
+**Value cache.** The platform sends one `parameter:retrieve` per value, all at once, when a deploy resolves its parameters. The first retrieve of an application (or scope) reads every value under its SSM path with one `get-parameters-by-path` and keeps them on disk for a short TTL; the entrypoint answers the rest from there, before the workflow starts, and concurrent misses wait for that first read instead of each running the full workflow. Only version-pinned retrieves (`external_id` ending in `#<version>`, which is what `store` returns) are served from the cache, and only when the cached version matches: SSM versions are immutable, so a hit is the same value SSM would return. Versionless retrieves, retrieves that pin a version the cache doesn't hold (they run alongside the others instead of waiting), and consumers that override the `retrieve` workflow take the full workflow as before. A `store` or `delete` drops the cached values of its path, so the next retrieve reads it again. Without `ssm:GetParametersByPath` the cache fill fails and retrieve falls back to `get-parameter`. Agent environment:
 
 | Variable | Default | |
 |---|---|---|
-| `NP_PARAMETERS_CACHE_TTL_SECS` | `30` | Lifetime of cached values, enough to cover the retrieves of one deploy. `0` turns the cache off. |
+| `NP_PARAMETERS_CACHE_TTL_SECS` | `60` | Lifetime of cached values, enough to cover the retrieves of one deploy. `0` turns the cache off. |
 | `NP_PARAMETERS_CACHE_WAIT_SECS` | `20` | How long a retrieve waits for the one filling the cache before running the full workflow itself. Keep it under the platform's 30s retrieve timeout. |
 
-Cached values are secrets in clear text under `$SERVICE_PATH/value-cache/` (files 600, directory 700, expired files removed on read), next to the STS credentials cache.
+Cached values are secrets in clear text under `$SERVICE_PATH/value-cache/` (files 600, directory 700, expired files removed on each write and entrypoint run), next to the STS credentials cache.
 
 ### `azure-key-vault`
 

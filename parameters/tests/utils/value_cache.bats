@@ -1,7 +1,6 @@
 #!/usr/bin/env bats
 # =============================================================================
-# Unit tests for parameters/utils/value_cache — on-disk cache of retrieved
-# values shared by concurrent retrieves.
+# Unit tests for parameters/utils/value_cache
 # =============================================================================
 
 setup() {
@@ -11,7 +10,6 @@ setup() {
   source "$PROJECT_ROOT/testing/assertions.sh"
   source "$PARAMETERS_DIR/utils/value_cache"
 
-  # Fresh cache per test: it lives under $SERVICE_PATH/value-cache/.
   export SERVICE_PATH="$BATS_TEST_TMPDIR/service"
   mkdir -p "$SERVICE_PATH"
   GROUP="/nullplatform/organization_acme-1/application_app-4"
@@ -22,10 +20,10 @@ teardown() {
   unset SERVICE_PATH NP_PARAMETERS_CACHE_TTL_SECS
 }
 
-@test "value_cache: enabled by default with a 30s TTL" {
+@test "value_cache: enabled by default with a 60s TTL" {
   run value_cache_enabled
   assert_equal "$status" "0"
-  assert_equal "$(value_cache_ttl)" "30"
+  assert_equal "$(value_cache_ttl)" "60"
 }
 
 @test "value_cache: TTL 0 disables it" {
@@ -72,8 +70,26 @@ teardown() {
   [ "$status" -ne 0 ]
 }
 
-# Helper: age a group's cache file past its TTL (both the stored expiry, which
-# lookups read, and the mtime, which the sweep reads).
+@test "value_cache: invalidate drops the group's cached values" {
+  value_cache_write "$GROUP" "$VALUES"
+  value_cache_write "/nullplatform/other" '{"/nullplatform/other/X-1":{"value":"x","version":"1"}}'
+
+  value_cache_invalidate "$GROUP"
+
+  run value_cache_lookup "$GROUP" "$GROUP/DB_PASSWORD-10" "3"
+  [ "$status" -ne 0 ]
+  run value_cache_fresh "$GROUP"
+  [ "$status" -ne 0 ]
+  run value_cache_lookup "/nullplatform/other" "/nullplatform/other/X-1" "1"
+  assert_equal "$status" "0"
+}
+
+@test "value_cache: invalidate of an uncached group is a no-op" {
+  run value_cache_invalidate "$GROUP"
+
+  assert_equal "$status" "0"
+}
+
 expire_group() {
   local file
   file=$(value_cache_file "$1")
@@ -167,8 +183,6 @@ expire_group() {
 
 @test "value_cache: taking a free lock does not hold the caller's output open for the wait" {
   command -v flock >/dev/null 2>&1 || skip "flock not installed"
-  # The agent waits for every holder of the command's stdout to exit; a
-  # leftover watchdog sleep would delay the response by the whole wait.
   start=$SECONDS
   bash -c "source $PARAMETERS_DIR/utils/value_cache; SERVICE_PATH=$SERVICE_PATH value_cache_lock '$GROUP' 9 10; echo done" | cat > /dev/null
 

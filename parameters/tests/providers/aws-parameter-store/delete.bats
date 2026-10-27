@@ -83,3 +83,41 @@ EOF
   assert_contains "$captured" "--region us-east-1"
   assert_contains "$captured" "--name /nullplatform/abc-123"
 }
+
+stage_value_cache() {
+  export SERVICE_PATH="$BATS_TEST_TMPDIR/service"
+  mkdir -p "$SERVICE_PATH/utils"
+  cp "$PARAMETERS_DIR/utils/value_cache" "$SERVICE_PATH/utils/"
+  export EXTERNAL_ID_PATH="app-1/DB_PASSWORD-10"
+  bash -c "source $SERVICE_PATH/utils/value_cache; value_cache_write /nullplatform/app-1 '{\"/nullplatform/app-1/DB_PASSWORD-10\":{\"value\":\"old\",\"version\":\"3\"}}'"
+}
+
+@test "aws-parameter-store delete: invalidates the value cache of the parameter's path" {
+  stage_value_cache
+
+  run bash -c "$DEPS; source $SCRIPT"
+
+  assert_equal "$status" "0"
+  run bash -c "source $SERVICE_PATH/utils/value_cache; value_cache_lookup /nullplatform/app-1 /nullplatform/app-1/DB_PASSWORD-10 3"
+  [ "$status" -ne 0 ]
+}
+
+@test "aws-parameter-store delete: ParameterNotFound also invalidates the value cache" {
+  stage_value_cache
+
+  run bash -c "$DEPS; MOCK_AWS_MODE=not_found source $SCRIPT"
+
+  assert_equal "$status" "0"
+  run bash -c "source $SERVICE_PATH/utils/value_cache; value_cache_fresh /nullplatform/app-1"
+  [ "$status" -ne 0 ]
+}
+
+@test "aws-parameter-store delete: a failed delete keeps the value cache" {
+  stage_value_cache
+
+  run bash -c "$DEPS; MOCK_AWS_MODE=auth_error source $SCRIPT"
+
+  [ "$status" -ne 0 ]
+  run bash -c "source $SERVICE_PATH/utils/value_cache; value_cache_fresh /nullplatform/app-1"
+  assert_equal "$status" "0"
+}

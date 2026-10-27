@@ -102,8 +102,6 @@ EOF
 }
 
 # --- Value cache fill (utils/value_cache) -------------------------------------
-# A SERVICE_PATH holding utils/value_cache turns the cache on; the cache files
-# land under it, so each test gets its own.
 
 stage_value_cache() {
   export SERVICE_PATH="$BATS_TEST_TMPDIR/service"

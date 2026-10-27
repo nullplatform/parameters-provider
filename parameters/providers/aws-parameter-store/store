@@ -18,8 +18,6 @@ set -euo pipefail
 source "$PARAMETERS_ROOT/utils/build_external_id"
 build_external_id
 
-# SSM name from ./naming (`=` becomes `_`). EXTERNAL_ID itself (returned to the
-# platform) keeps the canonical form; retrieve/delete/cache_key map it the same way.
 # shellcheck source=parameters/providers/aws-parameter-store/naming
 source "$(dirname "${BASH_SOURCE[0]}")/naming"
 PARAM_NAME=$(ps_parameter_name "$EXTERNAL_ID")
@@ -59,6 +57,11 @@ if ! PUT_RESULT=$(aws ssm put-parameter "${put_args[@]}" --output json 2>"$err_f
   exit 1
 fi
 rm -f "$err_file"
+
+if [ -n "${SERVICE_PATH:-}" ] && [ -f "$SERVICE_PATH/utils/value_cache" ]; then
+  source "$SERVICE_PATH/utils/value_cache"
+  value_cache_invalidate "${PARAM_NAME%/*}"
+fi
 
 VERSION_ID=$(echo "$PUT_RESULT" | jq -r '.Version // empty')
 

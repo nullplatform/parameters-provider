@@ -153,8 +153,6 @@ teardown() {
 }
 
 # --- Retrieve fast path (utils/value_cache) -----------------------------------
-# The entrypoint uses its own directory as SERVICE_PATH, so these tests run a
-# staged copy of the package: the cache files then land in the test's tmpdir.
 
 stage_package() {
   PKG="$BATS_TEST_TMPDIR/pkg"
@@ -259,8 +257,6 @@ retrieve_context() {
   command -v flock >/dev/null 2>&1 || skip "flock not installed"
   stage_package
   seed_cache
-  # Another retrieve holds the group lock (e.g. refilling): a version the
-  # cache doesn't have must not wait for it.
   exec 8>"$(bash -c "source $PKG/utils/value_cache; SERVICE_PATH=$PKG value_cache_file '$GROUP'").lock"
   flock -x 8
   export NP_ACTION_CONTEXT="$(retrieve_context aws-parameter-store 'organization=acme-1/application=app-4/DB_PASSWORD-10#2')"

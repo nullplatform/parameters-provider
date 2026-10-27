@@ -1,44 +1,9 @@
 #!/bin/bash
-# Sourceable library — a short-lived on-disk cache of retrieved values, shared
-# by every retrieve the agent runs at the same time.
-#
-# Why
-#   The platform sends one parameter:retrieve per value, all at once, when a
-#   deploy (or its rollback) resolves its parameters. Each one runs the full
-#   workflow (np, aws-cli, jq), ~35Mi and ~2s of CPU, so a deploy with 64
-#   values runs 64 of them in parallel and can exhaust the node. A provider that
-#   can read every value of a group in one call (e.g. a Parameter Store path)
-#   fills this cache once; the other retrieves are answered from it by the
-#   entrypoint, before the workflow starts.
-#
-# Model
-#   - A "group" is a provider-defined key covering many values (for Parameter
-#     Store, the SSM path of the application or scope). One file per group:
-#       $SERVICE_PATH/value-cache/<sha256(group)[:16]>.json
-#       { "_cache_exp_epoch": <int>, "values": { "<name>": { "value": "...", "version": "..." } } }
-#   - Entries expire after NP_PARAMETERS_CACHE_TTL_SECS (default 30, enough to
-#     cover the retrieves of one deploy). 0 turns the cache off: every
-#     retrieve takes the full workflow, as before.
-#   - Lookups need the exact version and only hit when the cached one matches.
-#     A backend version is immutable, so (name, version) always maps to the
-#     same value and a hit is as correct as reading the backend. A versionless
-#     lookup could only mean "latest", which the cache may have missed by up to
-#     the TTL, so it never hits.
-#   - Files are mode 600 in a 700 dir and are written through tmp + rename, as
-#     in utils/assume_role. They hold secret values in clear text, so expired
-#     files of every group are swept on each write and each entrypoint run
-#     (value_cache_sweep), not only when their own group is read again.
-#   - Lookups never delete: a reader that found an expired file could
-#     otherwise remove the fresh one a writer had just renamed into place. The
-#     sweep removes a file only while holding that group's lock.
-#
-# Requires: jq, bash. flock is optional (see value_cache_lock).
 
 value_cache_ttl() {
-  echo "${NP_PARAMETERS_CACHE_TTL_SECS:-30}"
+  echo "${NP_PARAMETERS_CACHE_TTL_SECS:-60}"
 }
 
-# value_cache_enabled — true when the TTL is a positive integer.
 value_cache_enabled() {
   local ttl
   ttl=$(value_cache_ttl)
@@ -50,10 +15,8 @@ value_cache_dir() {
   echo "$SERVICE_PATH/value-cache"
 }
 
-# value_cache_file <group> — path of the group's cache file (may not exist).
 value_cache_file() {
   local group="$1" key
-  # GNU coreutils first, macOS shasum as fallback (local smoke tests).
   if command -v sha256sum >/dev/null 2>&1; then
     key=$(printf '%s' "$group" | sha256sum | cut -c1-16)
   else
@@ -62,9 +25,6 @@ value_cache_file() {
   echo "$(value_cache_dir)/$key.json"
 }
 
-# value_cache_lookup <group> <name> <version>
-# Prints the cached value and returns 0 on a fresh hit of that exact version;
-# returns 1 otherwise, always when <version> is empty (see Model).
 value_cache_lookup() {
   local group="$1" name="$2" version="${3:-}" file now hit
   [ -n "$version" ] || return 1
@@ -87,9 +47,6 @@ value_cache_lookup() {
   esac
 }
 
-# value_cache_fresh <group> — true when the group has an unexpired file. A miss
-# on a fresh group means the cache can't serve that value (another version, or
-# a name outside the path), so waiting on the group lock again won't help.
 value_cache_fresh() {
   local file
   file=$(value_cache_file "$1")
@@ -97,11 +54,10 @@ value_cache_fresh() {
   jq -e --argjson now "$(date -u +%s)" '(._cache_exp_epoch // 0) > $now' < "$file" >/dev/null 2>&1
 }
 
-# value_cache_sweep — removes expired cache files of every group, plus temp
-# files left by an interrupted write. Age comes from the file's mtime (its
-# write time), so no file needs parsing. Each removal holds that group's lock
-# (fd 7, non-blocking): a group being refilled is skipped, and so is the
-# caller's own group when it holds that lock. Without flock it just removes.
+value_cache_invalidate() {
+  rm -f "$(value_cache_file "$1")"
+}
+
 value_cache_sweep() {
   local dir ttl now f lock
   dir=$(value_cache_dir)
@@ -117,7 +73,6 @@ value_cache_sweep() {
         if command -v flock >/dev/null 2>&1; then
           exec 7>"$lock"
           flock -n 7 || { exec 7>&-; continue; }
-          # Re-check under the lock: a writer may have renamed a fresh file in.
           [ $(( $(date +%s) - $(date -r "$f" +%s 2>/dev/null || echo "$now") )) -ge "$ttl" ] && rm -f "$f"
           exec 7>&-
         else
@@ -130,8 +85,6 @@ value_cache_sweep() {
   return 0
 }
 
-# value_cache_write <group> <values_json>
-# values_json: { "<name>": { "value": "...", "version": "..." }, ... }
 value_cache_write() {
   local group="$1" values="$2" dir file tmp exp
   dir=$(value_cache_dir)
@@ -147,23 +100,6 @@ value_cache_write() {
   value_cache_sweep
 }
 
-# value_cache_lock <group> <fd> <wait_secs>
-# Takes an exclusive lock on the group, so concurrent retrieves wait for the
-# one filling the cache instead of all going to the backend. Holds it on <fd>
-# until that fd is closed (or the process exits). Returns 1 on timeout. Without
-# flock (e.g. macOS smoke tests) it returns 0 without locking.
-#
-# The agent image ships BusyBox flock, which has no -w, and BusyBox timeout's
-# watcher inherits <fd> and keeps the lock until the timeout expires. So the
-# wait is a blocking `flock -x` in the background plus a watchdog that closes
-# its copy of <fd> before sleeping and kills the flock on timeout. No polling:
-# a waiter is two sleeping processes. The lock lives on the open file
-# description, so it stays with this shell after the background flock exits.
-#
-# The watchdog writes to /dev/null and takes its sleep down with it when
-# killed: the agent treats a command as finished only once every holder of its
-# stdout/stderr exits, so a leftover `sleep <wait>` would hold each retrieve's
-# response for the full wait.
 value_cache_lock() {
   local group="$1" fd="$2" wait="$3" dir flock_pid watchdog_pid rc
   command -v flock >/dev/null 2>&1 || return 0

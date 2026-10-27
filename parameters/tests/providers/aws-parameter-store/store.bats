@@ -130,3 +130,32 @@ EOF
   [ "$status" -ne 0 ]
   assert_contains "$output" "❌ Failed to store parameter in AWS Parameter Store"
 }
+
+stage_value_cache() {
+  export SERVICE_PATH="$BATS_TEST_TMPDIR/service"
+  mkdir -p "$SERVICE_PATH/utils"
+  cp "$PARAMETERS_DIR/utils/value_cache" "$SERVICE_PATH/utils/"
+  bash -c "source $SERVICE_PATH/utils/value_cache; value_cache_write /nullplatform/organization_acme-1255165411/account_prod-95118862/namespace_billing-37094320/application_api-321402625 '{\"/nullplatform/organization_acme-1255165411/account_prod-95118862/namespace_billing-37094320/application_api-321402625/42\":{\"value\":\"old\",\"version\":\"6\"}}'"
+}
+
+@test "aws-parameter-store store: invalidates the value cache of the parameter's path" {
+  export PARAMETER_KIND="parameter"
+  stage_value_cache
+
+  run bash -c "$DEPS; source $SCRIPT"
+
+  assert_equal "$status" "0"
+  run bash -c "source $SERVICE_PATH/utils/value_cache; value_cache_fresh /nullplatform/organization_acme-1255165411/account_prod-95118862/namespace_billing-37094320/application_api-321402625"
+  [ "$status" -ne 0 ]
+}
+
+@test "aws-parameter-store store: a failed store keeps the value cache" {
+  export PARAMETER_KIND="parameter"
+  stage_value_cache
+
+  run bash -c "$DEPS; MOCK_AWS_EXIT=1 source $SCRIPT"
+
+  [ "$status" -ne 0 ]
+  run bash -c "source $SERVICE_PATH/utils/value_cache; value_cache_fresh /nullplatform/organization_acme-1255165411/account_prod-95118862/namespace_billing-37094320/application_api-321402625"
+  assert_equal "$status" "0"
+}

@@ -1,16 +1,7 @@
 #!/bin/bash
-# Sourceable — the one rule mapping an external_id path to its SSM parameter
-# name. setup, store, retrieve, delete and cache_key all go through it: the
-# value cache answers retrieves by name, so a name computed two ways would
-# never hit and would line the retrieves up behind its lock.
-#
-# The prefix is an invariant namespace for all platform parameters. SSM path
-# components only accept [A-Za-z0-9._-], so `=` (which binds NRN entities in
-# the external_id) becomes `_`.
 
 PS_NAME_PREFIX="/nullplatform/"
 
-# ps_parameter_name <external_id_path>  (no `#version` suffix)
 ps_parameter_name() {
   printf '%s%s' "$PS_NAME_PREFIX" "${1//=/_}"
 }

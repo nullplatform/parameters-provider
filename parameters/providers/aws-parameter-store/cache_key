@@ -1,14 +1,4 @@
 #!/bin/bash
-# Sourceable — maps a retrieve to its value-cache entry (see utils/value_cache),
-# from the notification alone: no np, aws or credentials, so the entrypoint can
-# answer cache hits before the workflow starts.
-#
-# The group is the SSM path holding the value, i.e. every value of the same
-# application (or scope), which retrieve reads in one get-parameters-by-path.
-# The name comes from ./naming, the rule store and retrieve use.
-#
-# Input:   CONTEXT (set by the entrypoint)
-# Exports: VALUE_CACHE_GROUP, VALUE_CACHE_NAME, VALUE_CACHE_VERSION
 
 # shellcheck source=parameters/providers/aws-parameter-store/naming
 source "$(dirname "${BASH_SOURCE[0]}")/naming"

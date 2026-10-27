@@ -10,7 +10,6 @@ set -euo pipefail
 #
 # Required env: EXTERNAL_ID, AWS_REGION, PS_NAME_PREFIX
 
-# SSM name from ./naming (same rule as store).
 # shellcheck source=parameters/providers/aws-parameter-store/naming
 source "$(dirname "${BASH_SOURCE[0]}")/naming"
 PARAM_NAME=$(ps_parameter_name "$EXTERNAL_ID_PATH")
@@ -43,4 +42,9 @@ else
     log error "Underlying error: $err"
     exit 1
   fi
+fi
+
+if [ -n "${SERVICE_PATH:-}" ] && [ -f "$SERVICE_PATH/utils/value_cache" ]; then
+  source "$SERVICE_PATH/utils/value_cache"
+  value_cache_invalidate "${PARAM_NAME%/*}"
 fi
