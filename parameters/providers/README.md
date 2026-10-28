@@ -2,7 +2,7 @@
 
 This directory contains all concrete provider implementations. Each subdirectory is one provider — fully self-contained.
 
-The dispatch layer (`parameters/build_context` + `parameters/{store,retrieve,delete,notify}`) is provider-agnostic. It selects a provider at runtime from env vars `SECRET_PROVIDER` / `PARAMETER_PROVIDER` and sources the matching scripts.
+The dispatch layer (`parameters/build_context` + `parameters/{store,retrieve,retrieve_batch,delete,notify}`) is provider-agnostic. It selects a provider at runtime from env vars `SECRET_PROVIDER` / `PARAMETER_PROVIDER` and sources the matching scripts.
 
 **Adding a new provider is a strictly additive change**: drop a directory here that satisfies this contract. No edits to dispatch, build_context, workflows, or other providers are required. The parameters package has zero knowledge of any specific provider.
 
@@ -16,6 +16,7 @@ providers/<provider_name>/
 ├── setup                 # (optional) Validate config, prepare connection handles
 ├── store                 # (required) Persist a parameter value
 ├── retrieve              # (required) Read a value by external_id
+├── retrieve_batch        # (optional) Read many values in one run (default runs retrieve per value)
 ├── delete                # (required) Idempotent delete by external_id
 ├── notify                # (optional) Per-provider notify hook (default is {"success":true})
 └── docs/                 # (recommended) architecture.md, iam-policy.md, etc.
@@ -36,6 +37,25 @@ providers/<provider_name>/
 3. Workflow's operation step (`store`/`retrieve`/`delete`/`notify`) sources `providers/$ACTIVE_PROVIDER/<operation>` and produces the JSON response.
 
 All steps share the same bash session — env vars set in any step are visible to the next.
+
+---
+
+## Batch retrieve
+
+When nullplatform needs many values at once (a deploy resolving its parameters), it sends one `parameter:retrieve_batch` instead of one `parameter:retrieve` per value. The values of a batch share their NRN, dimensions and provider, so `build_context` and `setup` run once for all of them, with the shared fields at the top of `$CONTEXT` as in a single retrieve:
+
+```json
+{ "action": "parameter:retrieve_batch", "entities": { ... }, "provider": { ... },
+  "values": [ { "external_id": "<path>#<version>", "parameter_name": "...", "secret": true, "encoding": "..." } ] }
+```
+
+The response lists the values it could read:
+
+```json
+{ "values": [ { "external_id": "<path>#<version>", "value": "..." } ] }
+```
+
+A provider without a `retrieve_batch` script gets `utils/retrieve_each`, which runs its `retrieve` once per value in the same session (one setup and credential exchange for all of them). A `retrieve_batch` script reads the values with the backend's batch API (`aws-parameter-store` uses `get-parameters`). Either way, a value missing from the response is retrieved again by nullplatform on its own with `parameter:retrieve`, which reports its error: a batch leaves out what it can't read instead of failing.
 
 ---
 

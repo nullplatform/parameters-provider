@@ -36,7 +36,7 @@ under `parameters/providers/`.
 ├── docs/                    # architecture, configuration, adding a provider
 └── parameters/
     ├── entrypoint           # action router (parameter:<action> → workflow)
-    ├── workflows/           # store / retrieve / delete / notify
+    ├── workflows/           # store / retrieve / retrieve_batch / delete / notify
     ├── utils/               # build_context, dispatch, assume_role*, prefetch_np, ...
     ├── providers/           # one directory per backend (+ Tofu install specs & docs)
     └── tests/               # BATS unit tests (mirror the source tree)

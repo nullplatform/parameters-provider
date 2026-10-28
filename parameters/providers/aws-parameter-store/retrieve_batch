@@ -1,0 +1,49 @@
+#!/bin/bash
+set -euo pipefail
+
+GET_PARAMETERS_MAX_NAMES=10
+
+lookups_file=$(mktemp)
+results_file=$(mktemp)
+
+echo "$CONTEXT" | jq -c --arg prefix "$PS_NAME_PREFIX" '
+  .values[]? | .external_id as $id | ($id | split("#")) as $parts
+  | {
+      external_id: $id,
+      name: ($prefix + ($parts[0] | gsub("="; "_"))),
+      selector: (if ($parts | length) > 1 then ":" + $parts[-1] else "" end)
+    }' > "$lookups_file"
+
+total=$(wc -l < "$lookups_file" | tr -d ' ')
+
+for ((offset = 0; offset < total; offset += GET_PARAMETERS_MAX_NAMES)); do
+  chunk=$(sed -n "$((offset + 1)),$((offset + GET_PARAMETERS_MAX_NAMES))p" "$lookups_file")
+  names=()
+  while IFS= read -r name; do
+    names+=("$name")
+  done < <(jq -r '.name + .selector' <<<"$chunk")
+
+  err_file=$(mktemp)
+  if response=$(aws ssm get-parameters \
+          --region "$AWS_REGION" \
+          --names "${names[@]}" \
+          --with-decryption \
+          --output json 2>"$err_file"); then
+    jq -c --slurpfile lookups <(echo "$chunk") '
+      (.Parameters // []) as $found
+      | $lookups[] as $lookup
+      | $found[]
+      | select(.Name == $lookup.name and (.Selector // "") == $lookup.selector)
+      | {external_id: $lookup.external_id, value: .Value}' <<<"$response" >> "$results_file"
+    missing=$(jq -r '(.InvalidParameters // []) | join(", ")' <<<"$response")
+    if [ -n "$missing" ]; then
+      log warn "⚠️  Not found in AWS Parameter Store, nullplatform retrieves them on their own: $missing"
+    fi
+  else
+    log warn "⚠️  get-parameters failed for ${#names[@]} values, nullplatform retrieves them on their own: $(cat "$err_file")"
+  fi
+  rm -f "$err_file"
+done
+
+jq -s '{values: .}' "$results_file"
+rm -f "$lookups_file" "$results_file"
