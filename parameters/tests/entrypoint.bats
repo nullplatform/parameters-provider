@@ -16,7 +16,7 @@ setup() {
 
   # Stage a fake parameters/workflows/ with the expected action workflows.
   mkdir -p "$SERVICE_PATH/workflows"
-  for action in store retrieve delete notify; do
+  for action in store retrieve retrieve_batch delete notify; do
     : > "$SERVICE_PATH/workflows/$action.yaml"
   done
 
@@ -76,6 +76,15 @@ teardown() {
 
   assert_equal "$status" "0"
   assert_contains "$output" "retrieve.yaml"
+}
+
+@test "entrypoint: retrieve_batch action routes to retrieve_batch.yaml" {
+  export NP_ACTION_CONTEXT='{"notification":{"action":"parameter:retrieve_batch","values":[{"external_id":"abc"}]}}'
+
+  run bash "$SCRIPT"
+
+  assert_equal "$status" "0"
+  assert_contains "$output" "retrieve_batch.yaml"
 }
 
 @test "entrypoint: delete action routes to delete.yaml" {

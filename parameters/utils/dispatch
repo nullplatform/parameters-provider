@@ -19,4 +19,9 @@ if [ "$ACTION" = "notify" ] && [ ! -f "$PROVIDER_DIR/notify" ]; then
   exit 0
 fi
 
+if [ "$ACTION" = "retrieve_batch" ] && [ ! -f "$PROVIDER_DIR/retrieve_batch" ]; then
+  source "$(dirname "${BASH_SOURCE[0]}")/retrieve_each"
+  exit 0
+fi
+
 source "$PROVIDER_DIR/$ACTION"

@@ -101,3 +101,25 @@ EOF
 
   [ "$status" -ne 0 ]
 }
+
+@test "dispatch: ACTION=retrieve_batch sources provider's retrieve_batch script" {
+  cat > "$PROVIDER_DIR/retrieve_batch" << 'EOF'
+echo '{"values":[{"external_id":"a","value":"native"}]}'
+EOF
+
+  run bash -c "$DISPATCH_PRELUDE ACTION=retrieve_batch source $SCRIPT"
+
+  assert_equal "$status" "0"
+  assert_equal "$output" '{"values":[{"external_id":"a","value":"native"}]}'
+}
+
+@test "dispatch: ACTION=retrieve_batch runs the provider's retrieve per value when it has no retrieve_batch" {
+  cat > "$PROVIDER_DIR/retrieve" << 'EOF'
+jq -n --arg value "v-$EXTERNAL_ID" '{value: $value}'
+EOF
+
+  run bash -c "$DISPATCH_PRELUDE ACTION=retrieve_batch CONTEXT='{\"values\":[{\"external_id\":\"a\"}]}' source $SCRIPT"
+
+  assert_equal "$status" "0"
+  assert_equal "$(echo "$output" | jq -c '.')" '{"values":[{"external_id":"a","value":"v-a"}]}'
+}

@@ -1,0 +1,27 @@
+#!/bin/bash
+set -euo pipefail
+
+results_file=$(mktemp)
+
+while IFS= read -r entry; do
+  external_id=$(jq -r '.external_id' <<<"$entry")
+  if value_json=$(
+    export EXTERNAL_ID="$external_id"
+    if [[ "$external_id" == *"#"* ]]; then
+      export EXTERNAL_ID_PATH="${external_id%#*}" EXTERNAL_ID_VERSION="${external_id##*#}"
+    else
+      export EXTERNAL_ID_PATH="$external_id" EXTERNAL_ID_VERSION=""
+    fi
+    PARAMETER_NAME=$(jq -r '.parameter_name // empty' <<<"$entry")
+    PARAMETER_ENCODING=$(jq -r '.encoding // empty' <<<"$entry")
+    export PARAMETER_NAME PARAMETER_ENCODING
+    source "$PROVIDER_DIR/retrieve"
+  ); then
+    jq -c --arg external_id "$external_id" '{external_id: $external_id, value: .value}' <<<"$value_json" >> "$results_file"
+  else
+    log warn "⚠️  Could not retrieve '$external_id' in the batch, nullplatform retrieves it on its own"
+  fi
+done < <(echo "$CONTEXT" | jq -c '.values[]?')
+
+jq -s '{values: .}' "$results_file"
+rm -f "$results_file"

@@ -1,0 +1,12 @@
+configuration:
+  ACTION: retrieve_batch
+steps:
+  - name: build_context
+    type: script
+    file: "$SERVICE_PATH/utils/build_context"
+    output:
+      - { name: ACTIVE_PROVIDER, type: environment }
+      - { name: PROVIDER_DIR, type: environment }
+  - name: retrieve_batch
+    type: script
+    file: "$SERVICE_PATH/utils/dispatch"
