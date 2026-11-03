@@ -1,27 +1,19 @@
-name: PR Checks
+name: tests
+
+# shellcheck and the trivy IaC scan run in their own workflows (shellcheck.yml,
+# trivy.yml); this one lints and validates the provider install specs and runs
+# the BATS unit tests.
 
 on:
   pull_request:
     branches: [main]
 
 jobs:
-  shellcheck:
-    # Shared reusable auto-discovers extensionless scripts by shebang
-    # (nullplatform/actions-nullplatform#81).
-    uses: nullplatform/actions-nullplatform/.github/workflows/shellcheck.yml@main
-
-  trivy-iac:
-    name: Trivy IaC Scan
-    permissions:
-      contents: read
-      security-events: write
-    uses: nullplatform/actions-nullplatform/.github/workflows/trivy-tofu-scan.yml@main
-
   tofu:
     name: Tofu Lint & Validate
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: opentofu/setup-opentofu@v2
         with:
@@ -48,7 +40,7 @@ jobs:
     name: Unit Tests
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           submodules: recursive
 
