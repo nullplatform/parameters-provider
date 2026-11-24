@@ -23,7 +23,7 @@ locals {
         instance.attributes.setup.kubernetes_role == null ? {} : {
           kubernetes_role = instance.attributes.setup.kubernetes_role
         },
-        try(instance.attributes.setup.auth_path, "") == "" ? {} : {
+        instance.attributes.setup.auth_path == null || instance.attributes.setup.auth_path == "" ? {} : {
           auth_path = instance.attributes.setup.auth_path
         }
       )

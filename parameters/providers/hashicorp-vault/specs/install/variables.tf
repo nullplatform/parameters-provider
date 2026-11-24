@@ -95,7 +95,8 @@ variable "instances" {
   validation {
     condition = alltrue([
       for _, instance in var.instances :
-      try(instance.attributes.setup.auth_path, "") == "" || (
+      # Conditional, not ||: trimprefix fails on null and || does not short-circuit.
+      instance.attributes.setup.auth_path == null || instance.attributes.setup.auth_path == "" ? true : (
         can(regex("^[A-Za-z0-9_-][A-Za-z0-9._-]*(/[A-Za-z0-9_-][A-Za-z0-9._-]*)*$", trimprefix(instance.attributes.setup.auth_path, "auth/")))
         && trimprefix(instance.attributes.setup.auth_path, "auth/") != "auth"
       )
