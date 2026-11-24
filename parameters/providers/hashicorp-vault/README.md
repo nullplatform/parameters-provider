@@ -28,7 +28,12 @@ Provider config (from the nullplatform provider specification):
   segment, then an optional subpath. `store` embeds it in the `external_id`, so
   stored references survive a later `path_prefix` change.
 
-The auth mounts are fixed to Vault's defaults (`auth/userpass`, `auth/kubernetes`).
+- **`setup.auth_path`** (env: `VAULT_AUTH_PATH`, optional) — the auth method mount,
+  relative to the namespace, with or without the `auth/` prefix. Empty uses the
+  default mount of the mode (`auth/userpass` or `auth/kubernetes`). Set it when Vault
+  runs in another cluster and validates the agent's cluster through its own mount
+  (e.g. `kubernetes-my-cluster`), since the default `auth/kubernetes` usually
+  validates the cluster where Vault itself runs.
 
 ### Vault Enterprise namespaces
 

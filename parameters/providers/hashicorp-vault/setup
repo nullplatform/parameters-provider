@@ -36,8 +36,9 @@ set -euo pipefail
 # The two are kept separate because a KV v2 path inside a namespace is
 # `<namespace>/<mount>/data/<subpath>` — the mount name sits between the namespace
 # and `data`, so a single field cannot encode both without ambiguity (which broke
-# read/write on Enterprise namespaces). The auth mounts are hardcoded to Vault's
-# defaults (auth/userpass, auth/kubernetes); VAULT_ADDR is operator-configurable.
+# read/write on Enterprise namespaces). The auth mount defaults to the auth mode
+# name (auth/userpass, auth/kubernetes) and can be overridden with .setup.auth_path /
+# VAULT_AUTH_PATH, e.g. one kubernetes mount per cluster when Vault runs elsewhere.
 #
 # On Vault Enterprise, credentials/roles are scoped to the namespace, so the login
 # must target it too — otherwise Vault returns "access denied".
@@ -50,10 +51,16 @@ VAULT_ADDR=$(get_config_value --env VAULT_ADDR --provider '.setup.address')
 VAULT_AUTH_MODE=$(get_config_value --env VAULT_AUTH_MODE --provider '.setup.auth_mode' --default "userpass")
 VAULT_NAMESPACE=$(get_config_value --env VAULT_NAMESPACE --provider '.setup.namespace' --default "")
 VAULT_PATH_PREFIX=$(get_config_value --env VAULT_PATH_PREFIX --provider '.setup.path_prefix' --default "$VAULT_DEFAULT_PATH_PREFIX")
+VAULT_AUTH_PATH=$(get_config_value --env VAULT_AUTH_PATH --provider '.setup.auth_path' --default "")
 # Trim surrounding slashes so URL composition never doubles them.
 VAULT_NAMESPACE="${VAULT_NAMESPACE#/}"
 VAULT_NAMESPACE="${VAULT_NAMESPACE%/}"
 VAULT_PATH_PREFIX="${VAULT_PATH_PREFIX%/}"
+# Accept the mount with or without the `auth/` prefix; empty falls back to the mode name.
+VAULT_AUTH_PATH="${VAULT_AUTH_PATH#/}"
+VAULT_AUTH_PATH="${VAULT_AUTH_PATH#auth/}"
+VAULT_AUTH_PATH="${VAULT_AUTH_PATH%/}"
+VAULT_AUTH_PATH="${VAULT_AUTH_PATH:-$VAULT_AUTH_MODE}"
 
 # Defense-in-depth: both values are interpolated raw into request URLs (the login
 # call and every store/retrieve/delete). They are multi-segment paths where `/` is
@@ -77,6 +84,7 @@ validate_vault_path_config() {
 }
 validate_vault_path_config namespace "$VAULT_NAMESPACE"
 validate_vault_path_config path_prefix "$VAULT_PATH_PREFIX"
+validate_vault_path_config auth_path "$VAULT_AUTH_PATH"
 
 # API base for the login call — namespace-prefixed on Vault Enterprise, plain
 # otherwise. store/retrieve/delete compose the same namespace prefix themselves.
@@ -129,7 +137,7 @@ case "$VAULT_AUTH_MODE" in
 
     # URL-encode the username — it is interpolated as a path segment of the login URL.
     VAULT_USERNAME_ENC=$(jq -rn --arg u "$VAULT_USERNAME" '$u | @uri')
-    LOGIN_URL="$VAULT_LOGIN_BASE/auth/userpass/login/$VAULT_USERNAME_ENC"
+    LOGIN_URL="$VAULT_LOGIN_BASE/auth/$VAULT_AUTH_PATH/login/$VAULT_USERNAME_ENC"
     LOGIN_PAYLOAD=$(jq -nc --arg password "$VAULT_PASSWORD" '{password: $password}')
     ;;
 
@@ -165,7 +173,7 @@ case "$VAULT_AUTH_MODE" in
     fi
 
     VAULT_K8S_JWT=$(<"$VAULT_K8S_JWT_PATH")
-    LOGIN_URL="$VAULT_LOGIN_BASE/auth/kubernetes/login"
+    LOGIN_URL="$VAULT_LOGIN_BASE/auth/$VAULT_AUTH_PATH/login"
     LOGIN_PAYLOAD=$(jq -nc --arg role "$VAULT_K8S_ROLE" --arg jwt "$VAULT_K8S_JWT" '{role: $role, jwt: $jwt}')
     ;;
 

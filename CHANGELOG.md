@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Make the HashiCorp Vault auth mount configurable (`setup.auth_path` / `VAULT_AUTH_PATH`) for both `userpass` and `kubernetes`, so the agent can log in through a cluster-specific kubernetes mount when Vault runs in another cluster. Empty keeps the default mounts (`auth/userpass`, `auth/kubernetes`).
 - Add support to manage (store, retrieve and delete) parameters from GCP Secret Manager, through the Secret Manager REST API with `curl` (no gcloud CLI to install at runtime) and native secret versions.
 - Authenticate to GCP Secret Manager with the agent pod's GKE Workload Identity via the metadata server, so no key or secret is handed to the agent; `GCP_ACCESS_TOKEN` overrides it for runs outside GCP.
 - Add the GCP Secret Manager install tofu module (`specs/install/`) built on the shared parameter-storage modules, plus a `specs/requirements/` module that grants the agent's Kubernetes service account (Workload Identity Federation principal) or extra members a least-privilege custom role (only the permissions the provider uses; a predefined role is optional) under an IAM condition scoped to the provider's secret name prefix.

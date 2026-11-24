@@ -78,6 +78,13 @@
             "title": "Vault Kubernetes role",
             "description": "Name of the Vault Kubernetes auth role bound to the agent's ServiceAccount. Required when the authentication mode is Kubernetes.",
             "order": 5
+          },
+          "auth_path": {
+            "type": "string",
+            "title": "Auth mount path",
+            "description": "Path of the Vault auth method mount, relative to the namespace and without the `auth/` prefix (e.g. kubernetes-my-cluster). Leave empty to use the default mount of the authentication mode (userpass or kubernetes). Useful when Vault validates several clusters, each with its own kubernetes mount.",
+            "order": 6,
+            "pattern": "^[A-Za-z0-9._/-]*$"
           }
         },
         "allOf": [
@@ -123,6 +130,10 @@
               "schema": { "not": { "const": "userpass" } }
             }
           }
+        },
+        {
+          "type": "Control",
+          "scope": "#/properties/setup/properties/auth_path"
         },
         {
           "type": "Control",

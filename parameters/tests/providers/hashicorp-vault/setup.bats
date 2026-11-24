@@ -392,3 +392,63 @@ teardown() {
   assert_contains "$captured" '"role":"nullplatform-agent"'
   assert_contains "$captured" '"jwt":"eyJhbGc.k8s-jwt.sig"'
 }
+
+# --- auth_path ----------------------------------------------------------------
+
+@test "vault setup: kubernetes logs in through a custom auth_path from PROVIDER_CONFIG" {
+  export VAULT_K8S_JWT_PATH="$SA_TOKEN_FILE"
+  export PROVIDER_CONFIG='{"setup":{"address":"https://vault.example.com","auth_mode":"kubernetes","kubernetes_role":"nullplatform-agent","auth_path":"kubernetes-aks-apps"}}'
+
+  run bash -c "$DEPS; source $SCRIPT"
+
+  assert_equal "$status" "0"
+  captured=$(cat "$CURL_LOG")
+  assert_contains "$captured" "https://vault.example.com/v1/auth/kubernetes-aks-apps/login"
+}
+
+@test "vault setup: auth_path accepts the auth/ prefix and surrounding slashes" {
+  export VAULT_K8S_JWT_PATH="$SA_TOKEN_FILE"
+  export PROVIDER_CONFIG='{"setup":{"address":"https://vault.example.com","auth_mode":"kubernetes","kubernetes_role":"nullplatform-agent","auth_path":"/auth/kubernetes-aks-apps/"}}'
+
+  run bash -c "$DEPS; source $SCRIPT"
+
+  assert_equal "$status" "0"
+  captured=$(cat "$CURL_LOG")
+  assert_contains "$captured" "https://vault.example.com/v1/auth/kubernetes-aks-apps/login"
+}
+
+@test "vault setup: custom auth_path is namespace-prefixed" {
+  export VAULT_K8S_JWT_PATH="$SA_TOKEN_FILE"
+  export PROVIDER_CONFIG='{"setup":{"address":"https://vault.example.com","namespace":"admin/ns","auth_mode":"kubernetes","kubernetes_role":"nullplatform-agent","auth_path":"kubernetes-aks-apps"}}'
+
+  run bash -c "$DEPS; source $SCRIPT"
+
+  assert_equal "$status" "0"
+  captured=$(cat "$CURL_LOG")
+  assert_contains "$captured" "https://vault.example.com/v1/admin/ns/auth/kubernetes-aks-apps/login"
+}
+
+@test "vault setup: userpass logs in through VAULT_AUTH_PATH env var" {
+  export VAULT_ADDR="https://vault.example.com"
+  export VAULT_USERNAME="agent"
+  export VAULT_PASSWORD="pw"
+  export VAULT_AUTH_PATH="userpass-agents"
+
+  run bash -c "$DEPS; source $SCRIPT"
+
+  assert_equal "$status" "0"
+  captured=$(cat "$CURL_LOG")
+  assert_contains "$captured" "https://vault.example.com/v1/auth/userpass-agents/login/agent"
+}
+
+@test "vault setup: rejects an auth_path containing a .. segment" {
+  export VAULT_ADDR="https://vault.example.com"
+  export VAULT_USERNAME="agent"
+  export VAULT_PASSWORD="pw"
+  export PROVIDER_CONFIG='{"setup":{"auth_path":"../sys"}}'
+
+  run bash -c "$DEPS; source $SCRIPT"
+
+  [ "$status" -ne 0 ]
+  assert_contains "$output" "❌ Invalid Vault auth_path"
+}
