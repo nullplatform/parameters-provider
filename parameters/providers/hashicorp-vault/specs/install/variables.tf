@@ -50,8 +50,8 @@ variable "instances" {
                                       (secret/data/nullplatform). auth_mode is "userpass" (default) or
                                       "kubernetes"; kubernetes_role is only used (and required) when
                                       auth_mode = "kubernetes" — leave it null for userpass. auth_path is
-                                      the auth mount without `auth/` (e.g. kubernetes-my-cluster); leave
-                                      it null to use the mode's default mount.
+                                      the auth mount (e.g. kubernetes-my-cluster; `auth/` prefix optional);
+                                      null or empty uses the mode's default mount.
       enable_notification_channel — create the agent API key + notification channel (default false).
       tags_selectors              — tags the agent uses to select/filter this channel against scope
                                       tags (e.g. { environment = "production" }); default {}.
@@ -95,8 +95,11 @@ variable "instances" {
   validation {
     condition = alltrue([
       for _, instance in var.instances :
-      instance.attributes.setup.auth_path == null || can(regex("^[A-Za-z0-9._/-]+$", instance.attributes.setup.auth_path))
+      try(instance.attributes.setup.auth_path, "") == "" || (
+        can(regex("^[A-Za-z0-9_-][A-Za-z0-9._-]*(/[A-Za-z0-9_-][A-Za-z0-9._-]*)*$", trimprefix(instance.attributes.setup.auth_path, "auth/")))
+        && trimprefix(instance.attributes.setup.auth_path, "auth/") != "auth"
+      )
     ])
-    error_message = "attributes.setup.auth_path may only contain letters, digits, '.', '_', '-' and '/'."
+    error_message = "attributes.setup.auth_path must be a mount name (e.g. kubernetes-my-cluster): '/'-separated segments of letters, digits, '.', '_' and '-', no empty, '.' or '..' segments; an 'auth/' prefix is optional. Leave it null or empty for the default mount."
   }
 }

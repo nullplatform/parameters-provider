@@ -56,13 +56,13 @@ VAULT_AUTH_PATH=$(get_config_value --env VAULT_AUTH_PATH --provider '.setup.auth
 VAULT_NAMESPACE="${VAULT_NAMESPACE#/}"
 VAULT_NAMESPACE="${VAULT_NAMESPACE%/}"
 VAULT_PATH_PREFIX="${VAULT_PATH_PREFIX%/}"
-# Accept the mount with or without the `auth/` prefix; empty falls back to the mode name.
+# Accept the mount with or without the `auth/` prefix and surrounding slashes.
+VAULT_AUTH_PATH_RAW="$VAULT_AUTH_PATH"
 VAULT_AUTH_PATH="${VAULT_AUTH_PATH#/}"
 VAULT_AUTH_PATH="${VAULT_AUTH_PATH#auth/}"
 VAULT_AUTH_PATH="${VAULT_AUTH_PATH%/}"
-VAULT_AUTH_PATH="${VAULT_AUTH_PATH:-$VAULT_AUTH_MODE}"
 
-# Defense-in-depth: both values are interpolated raw into request URLs (the login
+# Defense-in-depth: these values are interpolated raw into request URLs (the login
 # call and every store/retrieve/delete). They are multi-segment paths where `/` is
 # significant, so we validate rather than URL-encode (unlike the single-segment
 # username, which is @uri-encoded): allow only Vault-legal path characters and
@@ -84,7 +84,25 @@ validate_vault_path_config() {
 }
 validate_vault_path_config namespace "$VAULT_NAMESPACE"
 validate_vault_path_config path_prefix "$VAULT_PATH_PREFIX"
-validate_vault_path_config auth_path "$VAULT_AUTH_PATH"
+
+# An explicit auth_path must name a mount: stricter than the shared check (no empty
+# or `.` segments, not just `auth`), since a value that normalizes away would
+# silently log in through the default mount instead.
+if [ -n "$VAULT_AUTH_PATH_RAW" ]; then
+  validate_vault_path_config auth_path "$VAULT_AUTH_PATH"
+  if ! [[ "$VAULT_AUTH_PATH" =~ ^[A-Za-z0-9_-][A-Za-z0-9._-]*(/[A-Za-z0-9_-][A-Za-z0-9._-]*)*$ ]] || [ "$VAULT_AUTH_PATH" = "auth" ]; then
+    log error "❌ Invalid Vault auth_path: '$VAULT_AUTH_PATH_RAW'"
+    log error ""
+    log error "💡 Possible causes:"
+    log error "   • .setup.auth_path / VAULT_AUTH_PATH is empty after removing 'auth/' and slashes, or has empty or '.' segments"
+    log error ""
+    log error "🔧 How to fix:"
+    log error "   • Set the mount name, e.g. 'kubernetes-my-cluster', or leave it unset for the default mount"
+    exit 1
+  fi
+fi
+# Default: the mount named after the mode (auth/userpass, auth/kubernetes).
+VAULT_AUTH_PATH="${VAULT_AUTH_PATH:-$VAULT_AUTH_MODE}"
 
 # API base for the login call — namespace-prefixed on Vault Enterprise, plain
 # otherwise. store/retrieve/delete compose the same namespace prefix themselves.
@@ -192,6 +210,7 @@ esac
 # Exchange credentials/identity for a short-lived client token. The payload
 # carries the password / ServiceAccount JWT, so it is sent via stdin (--data @-)
 # rather than argv, keeping the secret out of the process table (ps / /proc).
+log info "🔐 Vault $VAULT_AUTH_MODE login via mount auth/$VAULT_AUTH_PATH"
 if ! LOGIN_RESPONSE=$(curl -s -X POST "$LOGIN_URL" --data @- <<<"$LOGIN_PAYLOAD"); then
   log error "❌ Failed to authenticate to Vault at $VAULT_ADDR"
   log error ""
@@ -209,20 +228,23 @@ fi
 VAULT_TOKEN=$(echo "$LOGIN_RESPONSE" | jq -r '.auth.client_token // empty' 2>/dev/null || true)
 
 if [ -z "$VAULT_TOKEN" ]; then
-  log error "❌ Vault $VAULT_AUTH_MODE login did not return a token"
+  log error "❌ Vault $VAULT_AUTH_MODE login via mount auth/$VAULT_AUTH_PATH did not return a token"
+  log error "   URL: $LOGIN_URL"
   log error ""
   log error "💡 Possible causes:"
   if [ "$VAULT_AUTH_MODE" = "userpass" ]; then
     log error "   • Wrong VAULT_USERNAME / VAULT_PASSWORD"
-    log error "   • The userpass auth method is not enabled (vault auth enable userpass)"
   else
     log error "   • The Vault role '$VAULT_K8S_ROLE' does not exist or does not bind this pod's ServiceAccount"
-    log error "   • The kubernetes auth method is not enabled or configured (vault auth enable kubernetes)"
+    log error "   • The mount cannot validate this cluster's tokens (kubernetes_host, CA or token reviewer)"
   fi
+  log error "   • No $VAULT_AUTH_MODE auth method is enabled at auth/$VAULT_AUTH_PATH in this namespace (check .setup.auth_path / VAULT_AUTH_PATH)"
   log error ""
   log error "🔧 How to fix:"
   log error "   • See the provider README for the required Vault + cluster setup"
-  log error "Vault error: $(echo "$LOGIN_RESPONSE" | jq -r '(.errors // ["unknown error"]) | join("; ")' 2>/dev/null || echo "unknown error")"
+  # Fall back to the raw body when Vault returns no errors array (proxy page, empty body).
+  VAULT_LOGIN_ERROR=$(echo "$LOGIN_RESPONSE" | jq -r '(.errors // []) | join("; ")' 2>/dev/null || true)
+  log error "Vault error: ${VAULT_LOGIN_ERROR:-${LOGIN_RESPONSE:0:200}}"
   exit 1
 fi
 

@@ -4,8 +4,8 @@ locals {
   # strings (with their own defaults), so emitting `null` would fail server-side
   # validation. Each key is only included when set — kubernetes_role when
   # auth_mode = "kubernetes", namespace for the Vault Enterprise namespace,
-  # path_prefix when overriding the default KV prefix, and auth_path when the
-  # auth method is not on its default mount.
+  # path_prefix when overriding the default KV prefix, and auth_path when set
+  # (empty counts as unset).
   instance_attributes = {
     for key, instance in var.instances : key => {
       sensibility = instance.attributes.sensibility
@@ -23,7 +23,7 @@ locals {
         instance.attributes.setup.kubernetes_role == null ? {} : {
           kubernetes_role = instance.attributes.setup.kubernetes_role
         },
-        instance.attributes.setup.auth_path == null ? {} : {
+        try(instance.attributes.setup.auth_path, "") == "" ? {} : {
           auth_path = instance.attributes.setup.auth_path
         }
       )

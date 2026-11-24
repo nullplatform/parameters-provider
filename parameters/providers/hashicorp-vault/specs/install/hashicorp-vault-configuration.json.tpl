@@ -82,9 +82,9 @@
           "auth_path": {
             "type": "string",
             "title": "Auth mount path",
-            "description": "Path of the Vault auth method mount, relative to the namespace and without the `auth/` prefix (e.g. kubernetes-my-cluster). Leave empty to use the default mount of the authentication mode (userpass or kubernetes). Useful when Vault validates several clusters, each with its own kubernetes mount.",
+            "description": "Vault auth method mount, relative to the namespace (e.g. kubernetes-my-cluster); an `auth/` prefix is optional. Leave empty to use the default mount of the authentication mode (userpass or kubernetes). Set it when Vault validates several clusters, each through its own kubernetes mount.",
             "order": 6,
-            "pattern": "^[A-Za-z0-9._/-]*$"
+            "pattern": "^((auth/)?[A-Za-z0-9_-][A-Za-z0-9._-]*(/[A-Za-z0-9_-][A-Za-z0-9._-]*)*)?$"
           }
         },
         "allOf": [
